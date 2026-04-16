@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
+import { useState } from "react";
 import { useTasks, ROLE_LABELS } from "../context/TaskContext";
 import type { UserRole } from "../types/task";
+import { LlmKeyConfigModal } from "./LlmKeyConfigModal";
 
 const DEPTS = [
   "集团办公室",
@@ -19,10 +21,11 @@ export function AppShell({
   onNav,
 }: {
   children: ReactNode;
-  active: "board" | "tasks";
-  onNav: (p: "board" | "tasks") => void;
+  active: "board" | "reports" | "tasks";
+  onNav: (p: "board" | "reports" | "tasks") => void;
 }) {
   const { user, setUser } = useTasks();
+  const [llmModalOpen, setLlmModalOpen] = useState(false);
 
   return (
     <div className="shell">
@@ -38,10 +41,25 @@ export function AppShell({
         <nav className="main-nav">
           <button
             type="button"
+            className="nav-btn nav-config"
+            onClick={() => setLlmModalOpen(true)}
+            title="配置 DeepSeek API Key"
+          >
+            模型 Key
+          </button>
+          <button
+            type="button"
             className={active === "board" ? "nav-btn active" : "nav-btn"}
             onClick={() => onNav("board")}
           >
             数据看板
+          </button>
+          <button
+            type="button"
+            className={active === "reports" ? "nav-btn active" : "nav-btn"}
+            onClick={() => onNav("reports")}
+          >
+            报告管理
           </button>
           <button
             type="button"
@@ -52,6 +70,8 @@ export function AppShell({
           </button>
         </nav>
       </header>
+
+      <LlmKeyConfigModal open={llmModalOpen} onClose={() => setLlmModalOpen(false)} />
 
       <div className="role-bar">
         <span className="role-label">当前视角</span>
