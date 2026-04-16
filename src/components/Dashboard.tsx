@@ -1,0 +1,317 @@
+import { useMemo, useState } from "react";
+import { BRANCHES, useTasks, WORKSHOPS_BY_BRANCH } from "../context/TaskContext";
+import type { TaskCategory } from "../types/task";
+import { riskForTask, riskLabel } from "../utils/risk";
+import { Donut } from "./Donut";
+
+function monthKey(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function inMonth(isoDate: string, key: string) {
+  return isoDate.slice(0, 7) === key;
+}
+
+const CATEGORY_META: Record<
+  TaskCategory,
+  { title: string; subtitle: string }
+> = {
+  安全生产: { title: "安全生产任务", subtitle: "消防、危化、双控与现场治理" },
+  技改项目: { title: "技改与投资项目", subtitle: "产线改造、装备升级与节能降耗" },
+  质量与环保: { title: "质量与环保任务", subtitle: "客户质量、排放与体系审核" },
+};
+
+export function Dashboard() {
+  const { visibleTasks, setScopeFilter, scopeFilter, toggleFollow } = useTasks();
+  const [reportMonth, setReportMonth] = useState(() => monthKey(new Date()));
+
+  const scopeOptions = useMemo(() => {
+    const opts: { value: string; label: string }[] = [
+      { value: "all", label: "全集团" },
+      { value: "group", label: "集团 / 职能部门直管" },
+    ];
+    for (const b of BRANCHES) {
+      opts.push({ value: `branch:${b}`, label: `分公司 · ${b}` });
+      for (const w of WORKSHOPS_BY_BRANCH[b] ?? []) {
+        opts.push({ value: `workshop:${b}:${w}`, label: `车间 · ${b} / ${w}` });
+      }
+    }
+    return opts;
+  }, []);
+
+  const kpis = useMemo(() => {
+    const total = visibleTasks.length;
+    const done = visibleTasks.filter((t) => t.status === "已完成").length;
+    const going = visibleTasks.filter((t) => t.status === "进行中").length;
+    const nodes = visibleTasks.filter((t) => inMonth(t.expectedCompletion, reportMonth));
+    const nodesDone = nodes.filter((t) => t.status === "已完成").length;
+    const today = new Date();
+    const delayed = nodes.filter(
+      (t) => t.status !== "已完成" && new Date(t.expectedCompletion) < today,
+    ).length;
+    return { total, done, going, nodes: nodes.length, nodesDone, delayed };
+  }, [visibleTasks, reportMonth]);
+
+  const riskBuckets = useMemo(() => {
+    let high = 0;
+    let medium = 0;
+    let low = 0;
+    const today = new Date();
+    for (const t of visibleTasks) {
+      const r = riskForTask(t, today);
+      if (r === "high") high += 1;
+      else if (r === "medium") medium += 1;
+      else low += 1;
+    }
+    return { high, medium, low };
+  }, [visibleTasks]);
+
+  const riskRows = useMemo(() => {
+    const today = new Date();
+    return [...visibleTasks]
+      .filter((t) => riskForTask(t, today) !== "low")
+      .sort((a, b) => a.expectedCompletion.localeCompare(b.expectedCompletion))
+      .slice(0, 6);
+  }, [visibleTasks]);
+
+  const pendingList = useMemo(() => {
+    const key = monthKey(new Date());
+    return visibleTasks.filter(
+      (t) => t.status !== "已完成" && (inMonth(t.expectedCompletion, key) || t.expectedCompletion < `${key}-01`),
+    );
+  }, [visibleTasks]);
+
+  const following = useMemo(() => visibleTasks.filter((t) => t.followedByUser), [visibleTasks]);
+
+  const byCategory = (cat: TaskCategory) => {
+    const subset = visibleTasks.filter((t) => t.category === cat);
+    const completed = subset.filter((t) => t.status === "已完成").length;
+    const solid = subset.filter((t) => t.status === "实质性进展").length;
+    const ongoing = subset.filter((t) => t.status === "进行中").length;
+    return { subset, completed, solid, ongoing };
+  };
+
+  return (
+    <div className="dashboard">
+      <div className="dash-main">
+        <section className="card kpi-section">
+          <div className="card-head">
+            <h2>重点任务总览</h2>
+            <div className="filters">
+              <select
+                className="fld"
+                value={scopeFilter}
+                onChange={(e) => setScopeFilter(e.target.value)}
+              >
+                {scopeOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="fld"
+                type="month"
+                value={reportMonth}
+                onChange={(e) => setReportMonth(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="kpi-grid">
+            <div className="kpi-card kpi-blue">
+              <div className="kpi-title">任务总数</div>
+              <div className="kpi-value">{kpis.total}</div>
+              <div className="kpi-meta">
+                <span>
+                  <i className="dot g" /> 已完成 {kpis.done}
+                </span>
+                <span>
+                  <i className="dot b" /> 进行中 {kpis.going}
+                </span>
+              </div>
+            </div>
+            <div className="kpi-card kpi-green">
+              <div className="kpi-title">本月节点（按期待完成时间）</div>
+              <div className="kpi-value">{kpis.nodes}</div>
+              <div className="kpi-meta">
+                <span>
+                  <i className="dot g" /> 已完成 {kpis.nodesDone}
+                </span>
+                <span>
+                  <i className="dot r" /> 已逾期 {kpis.delayed}
+                </span>
+                <span className="frac">
+                  月度目标 {kpis.nodesDone}/{Math.max(kpis.nodes, 1)}
+                </span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="card risk-section">
+          <div className="card-head">
+            <h2>风险预警</h2>
+            <a className="link-more" href="#">
+              查看更多
+            </a>
+          </div>
+          <div className="risk-lights">
+            <div className="light red">
+              <span className="siren" aria-hidden>
+                !
+              </span>
+              <div>
+                <div className="light-label">红灯（高）</div>
+                <div className="light-count">
+                  {riskBuckets.high} <small>项需立即督办</small>
+                </div>
+              </div>
+            </div>
+            <div className="light yellow">
+              <span className="siren" aria-hidden>
+                !
+              </span>
+              <div>
+                <div className="light-label">黄灯（中）</div>
+                <div className="light-count">
+                  {riskBuckets.medium} <small>项临近截止</small>
+                </div>
+              </div>
+            </div>
+            <div className="light blue">
+              <span className="siren" aria-hidden>
+                i
+              </span>
+              <div>
+                <div className="light-label">蓝灯（低）</div>
+                <div className="light-count">
+                  {riskBuckets.low} <small>项节奏正常</small>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>任务编号</th>
+                  <th>发起部门</th>
+                  <th>风险</th>
+                  <th>任务描述</th>
+                  <th>期待完成</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {riskRows.map((t) => {
+                  const r = riskForTask(t, new Date());
+                  return (
+                    <tr key={t.id}>
+                      <td className="mono">{t.code}</td>
+                      <td>{t.department}</td>
+                      <td>
+                        <span className={`pill risk-${r}`}>{riskLabel(r)}</span>
+                      </td>
+                      <td className="clamp">{t.description}</td>
+                      <td>{t.expectedCompletion}</td>
+                      <td>
+                        <button type="button" className="text-btn" onClick={() => toggleFollow(t.id)}>
+                          {t.followedByUser ? "取消关注" : "关注"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {riskRows.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="empty-cell">
+                      当前视角下暂无中高风险任务。
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="category-row">
+          {(Object.keys(CATEGORY_META) as TaskCategory[]).map((cat) => {
+            const meta = CATEGORY_META[cat];
+            const { subset, completed, solid, ongoing } = byCategory(cat);
+            return (
+              <div key={cat} className="card cat-card">
+                <div className="card-head tight">
+                  <div>
+                    <h3>{meta.title}</h3>
+                    <p className="muted tiny">{meta.subtitle}</p>
+                  </div>
+                  <a className="link-more" href="#">
+                    查看详情
+                  </a>
+                </div>
+                <div className="cat-filters">
+                  <span className="muted tiny">口径与总览卡片一致</span>
+                </div>
+                <div className="cat-stats">
+                  <span>任务 {subset.length} 条</span>
+                  <span className="muted tiny">
+                    {subset[0]?.branch ? `示例组织：${subset[0].branch}` : ""}
+                  </span>
+                </div>
+                <Donut
+                  segments={[
+                    { label: "已完成", value: completed, color: "#0d9f6e" },
+                    { label: "实质性进展", value: solid, color: "#d4a012" },
+                    { label: "进行中", value: ongoing, color: "#1d6bc6" },
+                  ]}
+                />
+              </div>
+            );
+          })}
+        </section>
+      </div>
+
+      <aside className="dash-side">
+        <div className="card side-card">
+          <div className="card-head tight">
+            <h3>本月待完成事项</h3>
+          </div>
+          <ul className="side-list">
+            {pendingList.slice(0, 8).map((t) => (
+              <li key={t.id}>
+                <span className="muted tiny">{t.expectedCompletion}</span>
+                <div>
+                  <strong>{t.branch}</strong>
+                  {t.workshop ? ` · ${t.workshop}` : ""}：{t.description.slice(0, 36)}
+                  {t.description.length > 36 ? "…" : ""}
+                </div>
+              </li>
+            ))}
+            {pendingList.length === 0 && <li className="muted">暂无待完成提醒。</li>}
+          </ul>
+        </div>
+        <div className="card side-card">
+          <div className="card-head tight">
+            <h3>我的关注</h3>
+          </div>
+          <ul className="side-list star">
+            {following.map((t) => (
+              <li key={t.id}>
+                <span className="star-icon" aria-hidden>
+                  ★
+                </span>
+                <div>
+                  <span className="mono tiny">{t.code}</span> — {t.description.slice(0, 42)}
+                  {t.description.length > 42 ? "…" : ""}
+                </div>
+              </li>
+            ))}
+            {following.length === 0 && (
+              <li className="muted">在任务列表或风险表中点击「关注」即可加入此处。</li>
+            )}
+          </ul>
+        </div>
+      </aside>
+    </div>
+  );
+}
