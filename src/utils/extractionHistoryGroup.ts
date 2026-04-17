@@ -41,6 +41,14 @@ export function pickExtractionDate(item: ExtractionHistoryItem): string {
   return item.savedAt.slice(0, 10);
 }
 
+/** 日报「提取日期」在界面上的展示（如 2026年4月17日） */
+export function formatReportCalendarDateZh(iso: string): string {
+  const m = iso.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return iso.trim() || "—";
+  const [, y, mo, da] = m;
+  return `${y}年${parseInt(mo, 10)}月${parseInt(da, 10)}日`;
+}
+
 /**
  * 从记录中读取「分公司名称」；缺失或非字符串时为「暂无」，并做路径分隔符规范化。
  */

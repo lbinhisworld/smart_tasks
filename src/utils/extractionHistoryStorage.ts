@@ -12,8 +12,15 @@
 import type {
   ExtractionHistoryItem,
   LlmCallStats,
+  PendingAiSuggestionTaskRow,
+  PendingDailyPlanTaskRow,
   QuantitativeMetricCitation,
 } from "../types/extractionHistory";
+import {
+  buildPendingTasksFromSavedReport,
+  PENDING_AI_SUGGESTION_TEMPLATE,
+} from "./buildPendingTasksFromSavedReport";
+import { pickExtractionDate } from "./extractionHistoryGroup";
 
 const STORAGE_KEY = "qifeng_extraction_history_v1";
 /** 本地保存条数上限（追加与导入均适用） */
@@ -73,6 +80,127 @@ function parseQuantitativeMetricCitationsRow(v: unknown): QuantitativeMetricCita
   return out.length ? out : undefined;
 }
 
+function isValidIsoDate(s: unknown): s is string {
+  return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s.trim());
+}
+
+function parsePendingDailyPlanTasks(
+  v: unknown,
+  fallbackReportDate: string,
+): PendingDailyPlanTaskRow[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: PendingDailyPlanTaskRow[] = [];
+  for (const el of v) {
+    if (!isRecord(el)) continue;
+    const { id, initiatingDepartment, requestDescription, extractionHistoryId, jumpNeedle } = el;
+    if (
+      typeof id === "string" &&
+      typeof initiatingDepartment === "string" &&
+      typeof requestDescription === "string" &&
+      typeof extractionHistoryId === "string" &&
+      typeof jumpNeedle === "string"
+    ) {
+      const rd = el.reportDate;
+      const reportDate = isValidIsoDate(rd) ? rd.trim() : fallbackReportDate;
+      const ed = el.executingDepartment;
+      const executingDepartment =
+        typeof ed === "string" && ed.trim() ? ed.trim() : "待明确";
+      out.push({
+        id,
+        initiatingDepartment,
+        executingDepartment,
+        reportDate,
+        requestDescription,
+        extractionHistoryId,
+        jumpNeedle,
+      });
+    }
+  }
+  return out.length ? out : undefined;
+}
+
+function parsePendingAiSuggestionTasks(
+  v: unknown,
+  fallbackReportDate: string,
+): PendingAiSuggestionTaskRow[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: PendingAiSuggestionTaskRow[] = [];
+  for (const el of v) {
+    if (!isRecord(el)) continue;
+    const { id, relatedDepartments, discoveredIssue, extractionHistoryId, jumpNeedle } = el;
+    if (
+      typeof id === "string" &&
+      typeof relatedDepartments === "string" &&
+      typeof discoveredIssue === "string" &&
+      typeof extractionHistoryId === "string" &&
+      typeof jumpNeedle === "string"
+    ) {
+      const rd = el.reportDate;
+      const reportDate = isValidIsoDate(rd) ? rd.trim() : fallbackReportDate;
+      const asg = el.aiSuggestion;
+      let discoveredOnly = discoveredIssue;
+      let aiSuggestion = PENDING_AI_SUGGESTION_TEMPLATE;
+      if (typeof asg === "string" && asg.trim()) {
+        aiSuggestion = asg.trim();
+      } else {
+        const legacyInner = discoveredIssue.match(/指出：「([^」]+)」/);
+        if (legacyInner?.[1]) {
+          const body = legacyInner[1].trim();
+          discoveredOnly = body.endsWith("。") ? body : `${body}。`;
+        }
+      }
+      out.push({
+        id,
+        relatedDepartments,
+        reportDate,
+        discoveredIssue: discoveredOnly,
+        aiSuggestion,
+        extractionHistoryId,
+        jumpNeedle,
+      });
+    }
+  }
+  return out.length ? out : undefined;
+}
+
+function pendingRowsMissingReportDate(item: ExtractionHistoryItem): boolean {
+  const rows = [...(item.pendingDailyPlanTasks ?? []), ...(item.pendingAiSuggestionTasks ?? [])];
+  return rows.some((r) => !isValidIsoDate(r.reportDate));
+}
+
+function pendingDailyPlanMissingExecutingDept(item: ExtractionHistoryItem): boolean {
+  const rows = item.pendingDailyPlanTasks ?? [];
+  return rows.some((r) => typeof r.executingDepartment !== "string" || !r.executingDepartment.trim());
+}
+
+function pendingAiMissingAiSuggestionField(item: ExtractionHistoryItem): boolean {
+  const rows = item.pendingAiSuggestionTasks ?? [];
+  return rows.some((r) => typeof r.aiSuggestion !== "string" || !r.aiSuggestion.trim());
+}
+
+function normalizePendingRowReportDates(item: ExtractionHistoryItem): ExtractionHistoryItem {
+  const d = pickExtractionDate(item);
+  const fixPlan = (rows: PendingDailyPlanTaskRow[] | undefined): PendingDailyPlanTaskRow[] | undefined => {
+    if (!rows?.length) return rows;
+    return rows.map((r) => ({
+      ...r,
+      reportDate: isValidIsoDate(r.reportDate) ? r.reportDate.trim() : d,
+    }));
+  };
+  const fixAi = (rows: PendingAiSuggestionTaskRow[] | undefined): PendingAiSuggestionTaskRow[] | undefined => {
+    if (!rows?.length) return rows;
+    return rows.map((r) => ({
+      ...r,
+      reportDate: isValidIsoDate(r.reportDate) ? r.reportDate.trim() : d,
+    }));
+  };
+  return {
+    ...item,
+    pendingDailyPlanTasks: fixPlan(item.pendingDailyPlanTasks),
+    pendingAiSuggestionTasks: fixAi(item.pendingAiSuggestionTasks),
+  };
+}
+
 function parseLlmStats(v: unknown): LlmCallStats | undefined {
   if (!isRecord(v)) return undefined;
   const model = v.model;
@@ -126,7 +254,7 @@ export function parseImportedExtractionHistory(json: unknown): ExtractionHistory
         ? null
         : el.parsedJson;
 
-    out.push({
+    const draft: ExtractionHistoryItem = {
       id,
       savedAt,
       fileName,
@@ -136,6 +264,12 @@ export function parseImportedExtractionHistory(json: unknown): ExtractionHistory
       displayTitle: typeof el.displayTitle === "string" ? el.displayTitle : undefined,
       llmStats: parseLlmStats(el.llmStats),
       quantitativeMetricCitations: parseQuantitativeMetricCitationsRow(el.quantitativeMetricCitations),
+    };
+    const fallbackDate = pickExtractionDate(draft);
+    out.push({
+      ...draft,
+      pendingDailyPlanTasks: parsePendingDailyPlanTasks(el.pendingDailyPlanTasks, fallbackDate),
+      pendingAiSuggestionTasks: parsePendingAiSuggestionTasks(el.pendingAiSuggestionTasks, fallbackDate),
     });
   }
   return out;
@@ -147,7 +281,51 @@ export function loadExtractionHistory(): ExtractionHistoryItem[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const arr = JSON.parse(raw) as ExtractionHistoryItem[];
-    return Array.isArray(arr) ? arr : [];
+    if (!Array.isArray(arr)) return [];
+    let changed = false;
+    const mapped = arr.map((item) => {
+      let working = item as ExtractionHistoryItem;
+      if (pendingRowsMissingReportDate(working)) {
+        changed = true;
+        working = normalizePendingRowReportDates(working);
+      }
+
+      const missingPending =
+        working.pendingDailyPlanTasks === undefined && working.pendingAiSuggestionTasks === undefined;
+      const staleDailyExecuting =
+        !missingPending &&
+        pendingDailyPlanMissingExecutingDept(working) &&
+        working.parsedJson != null &&
+        typeof working.parsedJson === "object";
+      const staleAiSuggestionColumn =
+        !missingPending &&
+        pendingAiMissingAiSuggestionField(working) &&
+        working.parsedJson != null &&
+        typeof working.parsedJson === "object";
+      if (!missingPending && !staleDailyExecuting && !staleAiSuggestionColumn) {
+        return working;
+      }
+      if (working.parsedJson == null || typeof working.parsedJson !== "object") {
+        return working;
+      }
+      const built = buildPendingTasksFromSavedReport(working);
+      if (built.pendingDailyPlanTasks.length === 0 && built.pendingAiSuggestionTasks.length === 0) {
+        changed = true;
+        return {
+          ...working,
+          pendingDailyPlanTasks: [],
+          pendingAiSuggestionTasks: [],
+        };
+      }
+      changed = true;
+      return { ...working, ...built };
+    });
+    if (changed) {
+      const next = mapped.slice(0, MAX_HISTORY_ITEMS);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      return next;
+    }
+    return mapped;
   } catch {
     return [];
   }

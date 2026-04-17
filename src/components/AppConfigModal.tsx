@@ -1,24 +1,27 @@
 import { useEffect, useState } from "react";
+import { useTasks } from "../context/TaskContext";
 import {
   clearStoredDeepseekApiKey,
   getStoredDeepseekApiKey,
   setStoredDeepseekApiKey,
 } from "../utils/llmExtract";
+import { parseOrgStructureUserInput } from "../utils/orgStructureInput";
 import { getOrgStructureText, setOrgStructureText } from "../utils/orgStructureStorage";
 
 type ConfigTab = "llm" | "org";
 
 export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { setUser } = useTasks();
   const [tab, setTab] = useState<ConfigTab>("llm");
   const [apiKey, setApiKey] = useState("");
   const [llmHint, setLlmHint] = useState<string | null>(null);
   const [orgText, setOrgText] = useState("");
-  const [orgSaved, setOrgSaved] = useState(false);
+  const [orgHint, setOrgHint] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setTab("llm");
-    setOrgSaved(false);
+    setOrgHint(null);
     const existing = getStoredDeepseekApiKey();
     setApiKey(existing ?? "");
     setLlmHint(
@@ -41,8 +44,26 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
   }
 
   function saveOrg() {
-    setOrgStructureText(orgText);
-    setOrgSaved(true);
+    const r = parseOrgStructureUserInput(orgText);
+    if (!r.ok) {
+      alert(r.error);
+      return;
+    }
+    setOrgStructureText(r.linesText);
+    setOrgText(r.linesText);
+    if (r.suggestedPerspective) {
+      setUser({ perspective: r.suggestedPerspective });
+    }
+    if (r.ignoredPerspective) {
+      alert(
+        `部门架构已保存。JSON 中的视角「${r.ignoredPerspective}」不在新架构对应的下拉选项中，未修改当前视角；请在顶部「当前视角」中手动选择。`,
+      );
+    }
+    setOrgHint(
+      r.suggestedPerspective
+        ? `部门架构已保存。当前视角已更新为「${r.suggestedPerspective}」。`
+        : "部门架构已保存。",
+    );
   }
 
   return (
@@ -133,7 +154,9 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
           {tab === "org" && (
             <div className="app-config-panel" role="tabpanel">
               <p className="muted small app-config-intro">
-                以下为齐峰集团部门与分公司架构（每行一条）。可编辑后点击「保存」写入本机浏览器。
+                支持<strong>每行一条</strong>架构路径（如 <code>一级.二级.三级</code>），或贴入<strong>JSON</strong>：可使用{" "}
+                <code>structure</code> 树（每项 <code>name</code>、可选 <code>children</code>，与 <code>company_name</code> 同级的公司架构格式），保存后展开为点分路径；亦支持 <code>lines</code> 等扁平数组。可选{" "}
+                <code>currentPerspective</code> / <code>perspective</code> / <code>当前视角</code>（须与顶部视角选项一致，保存后自动同步）。
               </p>
               <label className="org-structure-label">
                 <span className="sr-only">部门架构</span>
@@ -143,12 +166,12 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
                   value={orgText}
                   onChange={(e) => {
                     setOrgText(e.target.value);
-                    setOrgSaved(false);
+                    setOrgHint(null);
                   }}
                   spellCheck={false}
                 />
               </label>
-              {orgSaved && <p className="report-hint">部门架构已保存。</p>}
+              {orgHint && <p className="report-hint">{orgHint}</p>}
               <div className="llm-modal-actions">
                 <button type="button" className="primary-btn" onClick={saveOrg}>
                   保存

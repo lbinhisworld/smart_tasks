@@ -1,5 +1,5 @@
 /**
- * @fileoverview 提取历史时间线：按日折叠、单条记录的原文/JSON/原始响应 Tab、删除、从看板跳转时的高亮与滚动；可打开归档抽屉。
+ * @fileoverview 提取历史时间线：按日折叠（默认全部展开）、单条记录卡片默认展开，含结构化提取 / 原始报告 / 引用提取 Tab、删除、从看板跳转时的高亮与滚动；可打开归档抽屉。
  *
  * **设计要点**
  * - `extractionFocus` 由父级在读完 `sessionStorage` 后传入；消费后调用 `onExtractionFocusConsumed` 清空，防止二次滚动。
@@ -11,7 +11,7 @@
  * @module ExtractionHistoryList
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import type { ExtractionHistoryItem, QuantitativeMetricCitation } from "../types/extractionHistory";
 import { buildTimelineGroups } from "../utils/extractionHistoryGroup";
 import { mergeExcerptHighlightRanges } from "../utils/quantitativeMetricCitations";
@@ -20,7 +20,13 @@ import { buildExtractionHistoryTitle } from "../utils/extractionHistoryTitle";
 import { ReportDataArchiveDrawer } from "./ReportDataArchiveDrawer";
 import { ReportJsonPreview } from "./ReportJsonPreview";
 
-type TabId = "view" | "json" | "raw" | "citations";
+type TabId = "view" | "raw" | "citations";
+
+/** 兼容旧会话中曾选中的「json」Tab，统一回到结构化提取 */
+function normalizeHistoryTab(tab: string | undefined): TabId {
+  if (tab === "raw" || tab === "citations") return tab;
+  return "view";
+}
 
 function formatSavedAt(iso: string) {
   try {
@@ -55,7 +61,7 @@ function highlightOriginalText(text: string, needle: string | null, markIdSuffix
   );
 }
 
-/** 将整条记录滚入视口，并把「原始数据」内可滚动的 pre 滚到黄标位置（pre 有 max-height + overflow:auto，仅 scrollIntoView 不够）。 */
+/** 将整条记录滚入视口，并把「原始报告」内可滚动的 pre 滚到黄标位置（pre 有 max-height + overflow:auto，仅 scrollIntoView 不够）。 */
 function scrollExtractionRawHighlightIntoView(itemId: string) {
   const row = document.getElementById(`history-item-${itemId}`);
   const pre = document.getElementById(`history-raw-${itemId}`) as HTMLElement | null;
@@ -155,22 +161,6 @@ function MetricCitationsTable({ item }: { item: ExtractionHistoryItem }) {
   );
 }
 
-function prettyJson(item: ExtractionHistoryItem): string {
-  if (item.parsedJson != null) {
-    try {
-      return JSON.stringify(item.parsedJson, null, 2);
-    } catch {
-      return item.rawModelResponse;
-    }
-  }
-  try {
-    const o = JSON.parse(item.rawModelResponse) as unknown;
-    return JSON.stringify(o, null, 2);
-  } catch {
-    return item.rawModelResponse;
-  }
-}
-
 /**
  * @param items - 当前历史列表
  * @param onRemove - 删除单条并回写 storage 由父级处理
@@ -178,6 +168,7 @@ function prettyJson(item: ExtractionHistoryItem): string {
  * @param onExtractionFocusConsumed - 焦点应用后通知父级清除，避免保留状态
  * @param onRefreshQuantitativeCitations - 按时间线顺序逐条重算引用提取并持久化
  * @param citationsRefreshing - 刷新进行中，禁用按钮
+ * @param extraTitleActions - 标题行右侧额外操作（如导出/导入）
  */
 export function ExtractionHistoryList({
   items,
@@ -186,6 +177,7 @@ export function ExtractionHistoryList({
   onExtractionFocusConsumed,
   onRefreshQuantitativeCitations,
   citationsRefreshing = false,
+  extraTitleActions,
 }: {
   items: ExtractionHistoryItem[];
   onRemove: (id: string) => void;
@@ -193,6 +185,7 @@ export function ExtractionHistoryList({
   onExtractionFocusConsumed?: () => void;
   onRefreshQuantitativeCitations?: () => void | Promise<void>;
   citationsRefreshing?: boolean;
+  extraTitleActions?: ReactNode;
 }) {
   const [tabById, setTabById] = useState<Record<string, TabId>>({});
   const [rawHighlight, setRawHighlight] = useState<{ id: string; needle: string } | null>(null);
@@ -206,6 +199,7 @@ export function ExtractionHistoryList({
 
   const groups = useMemo(() => buildTimelineGroups(items), [items]);
   const [openByDate, setOpenByDate] = useState<Record<string, boolean>>({});
+  const [itemDetailsOpen, setItemDetailsOpen] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (items.length === 0) {
@@ -215,23 +209,34 @@ export function ExtractionHistoryList({
     }
   }, [items.length]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (groups.length === 0) {
       setOpenByDate({});
       return;
     }
-    const validDates = new Set(groups.map((g) => g.date));
     setOpenByDate((prev) => {
       const next: Record<string, boolean> = {};
-      for (const [k, v] of Object.entries(prev)) {
-        if (validDates.has(k) && v) next[k] = true;
-      }
-      if (Object.keys(next).length === 0) {
-        next[groups[0].date] = true;
+      for (const g of groups) {
+        const d = g.date;
+        next[d] = prev[d] !== undefined ? Boolean(prev[d]) : true;
       }
       return next;
     });
   }, [groups]);
+
+  useLayoutEffect(() => {
+    if (items.length === 0) {
+      setItemDetailsOpen({});
+      return;
+    }
+    setItemDetailsOpen((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const it of items) {
+        next[it.id] = prev[it.id] !== undefined ? Boolean(prev[it.id]) : true;
+      }
+      return next;
+    });
+  }, [items]);
 
   useEffect(() => {
     if (!extractionFocus) return;
@@ -242,6 +247,7 @@ export function ExtractionHistoryList({
     }
     const g = groups.find((gr) => gr.items.some((it) => it.id === id));
     if (g) setOpenByDate((m) => ({ ...m, [g.date]: true }));
+    setItemDetailsOpen((m) => ({ ...m, [id]: true }));
     setTabById((m) => ({ ...m, [id]: "raw" }));
     setRawHighlight({ id, needle });
     onExtractionFocusConsumed?.();
@@ -265,6 +271,22 @@ export function ExtractionHistoryList({
           <span className="history-count-badge" aria-label={`共 ${items.length} 条记录`}>
             共 {items.length} 条
           </span>
+          {(extraTitleActions || onRefreshQuantitativeCitations) && (
+            <div className="history-title-actions">
+              {extraTitleActions}
+              {onRefreshQuantitativeCitations && (
+                <button
+                  type="button"
+                  className="ghost-btn tiny-btn"
+                  disabled={citationsRefreshing}
+                  onClick={() => void onRefreshQuantitativeCitations()}
+                  title="按时间线顺序逐条重算各记录的引用提取并保存到本地"
+                >
+                  {citationsRefreshing ? "刷新中…" : "刷新引用提取"}
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <p className="muted small">解析成功后点击「保存」，记录将出现在此处。</p>
       </section>
@@ -279,17 +301,20 @@ export function ExtractionHistoryList({
         <span className="history-count-badge" aria-label={`共 ${items.length} 条记录`}>
           共 {items.length} 条
         </span>
-        {onRefreshQuantitativeCitations && (
+        {(extraTitleActions || onRefreshQuantitativeCitations) && (
           <div className="history-title-actions">
-            <button
-              type="button"
-              className="ghost-btn tiny-btn"
-              disabled={citationsRefreshing}
-              onClick={() => void onRefreshQuantitativeCitations()}
-              title="按时间线顺序逐条重算各记录的引用提取并保存到本地"
-            >
-              {citationsRefreshing ? "刷新中…" : "刷新引用提取"}
-            </button>
+            {extraTitleActions}
+            {onRefreshQuantitativeCitations && (
+              <button
+                type="button"
+                className="ghost-btn tiny-btn"
+                disabled={citationsRefreshing}
+                onClick={() => void onRefreshQuantitativeCitations()}
+                title="按时间线顺序逐条重算各记录的引用提取并保存到本地"
+              >
+                {citationsRefreshing ? "刷新中…" : "刷新引用提取"}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -299,7 +324,7 @@ export function ExtractionHistoryList({
           <details
             key={g.date}
             className="timeline-date-node"
-            open={Boolean(openByDate[g.date])}
+            open={openByDate[g.date] ?? true}
             onToggle={(e) => {
               const el = e.currentTarget;
               setOpenByDate((m) => ({ ...m, [g.date]: el.open }));
@@ -318,10 +343,14 @@ export function ExtractionHistoryList({
                   <HistoryRow
                     key={item.id}
                     item={item}
-                    activeTab={tabById[item.id] ?? "view"}
+                    activeTab={normalizeHistoryTab(tabById[item.id])}
                     onTab={(tab) => setTab(item.id, tab)}
                     onRemove={() => onRemove(item.id)}
                     rawHighlightNeedle={rawHighlight?.id === item.id ? rawHighlight.needle : null}
+                    detailsOpen={itemDetailsOpen[item.id] ?? true}
+                    onDetailsOpenChange={(open) =>
+                      setItemDetailsOpen((m) => ({ ...m, [item.id]: open }))
+                    }
                     onViewFile={() => {
                       setArchiveItem(item);
                       setArchiveDrawerOpen(true);
@@ -357,6 +386,8 @@ function HistoryRow({
   onRemove,
   onViewFile,
   rawHighlightNeedle,
+  detailsOpen,
+  onDetailsOpenChange,
 }: {
   item: ExtractionHistoryItem;
   activeTab: TabId;
@@ -364,9 +395,9 @@ function HistoryRow({
   onRemove: () => void;
   onViewFile: () => void;
   rawHighlightNeedle: string | null;
+  detailsOpen: boolean;
+  onDetailsOpenChange: (open: boolean) => void;
 }) {
-  const detailsRef = useRef<HTMLDetailsElement>(null);
-  const jsonStr = useMemo(() => prettyJson(item), [item]);
   const savedLabel = useMemo(() => formatSavedAt(item.savedAt), [item.savedAt]);
   const listTitle = useMemo(
     () =>
@@ -377,15 +408,17 @@ function HistoryRow({
   );
 
   useEffect(() => {
-    if (rawHighlightNeedle && detailsRef.current && !detailsRef.current.open) {
-      detailsRef.current.open = true;
-    }
-  }, [rawHighlightNeedle, item.id]);
+    if (rawHighlightNeedle) onDetailsOpenChange(true);
+  }, [rawHighlightNeedle, item.id, onDetailsOpenChange]);
 
   return (
     <li id={`history-item-${item.id}`} className="history-item card nested">
       <div className="history-item-shell">
-        <details ref={detailsRef} className="history-item-details">
+        <details
+          className="history-item-details"
+          open={detailsOpen}
+          onToggle={(e) => onDetailsOpenChange(e.currentTarget.open)}
+        >
           <summary
             className="history-item-summary"
             aria-label={`${listTitle}，点击展开或收起详情`}
@@ -431,16 +464,7 @@ function HistoryRow({
                 className={activeTab === "view" ? "history-tab active" : "history-tab"}
                 onClick={() => onTab("view")}
               >
-                提取 view
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === "json"}
-                className={activeTab === "json" ? "history-tab active" : "history-tab"}
-                onClick={() => onTab("json")}
-              >
-                提取 json
+                结构化提取
               </button>
               <button
                 type="button"
@@ -449,7 +473,7 @@ function HistoryRow({
                 className={activeTab === "raw" ? "history-tab active" : "history-tab"}
                 onClick={() => onTab("raw")}
               >
-                原始数据
+                原始报告
               </button>
               <button
                 type="button"
@@ -471,7 +495,6 @@ function HistoryRow({
                   )}
                 </div>
               )}
-              {activeTab === "json" && <pre className="history-json-pre">{jsonStr}</pre>}
               {activeTab === "raw" && (
                 <pre id={`history-raw-${item.id}`} className="history-raw-pre">
                   {highlightOriginalText(item.originalText, rawHighlightNeedle, item.id)}

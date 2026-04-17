@@ -1,14 +1,32 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-  CATEGORIES,
-  DEFAULT_WORKSHOPS_FOR_SCOPE,
-  STATUSES,
-  useTasks,
-  WORKSHOPS_BY_BRANCH,
-} from "../context/TaskContext";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CATEGORIES, STATUSES, useTasks } from "../context/TaskContext";
+import type { PlanHistorySnapshot } from "../types/planHistory";
 import type { Task, TaskCategory, TaskStatus } from "../types/task";
-import { getBranchCompanyNamesFromOrg } from "../utils/leaderPerspective";
-import { ORG_STRUCTURE_CHANGED_EVENT } from "../utils/orgStructureStorage";
+import { formatReportCalendarDateZh } from "../utils/extractionHistoryGroup";
+import {
+  branchRootFromOrgPath,
+  GROUP_LEADER_PERSPECTIVE,
+  isBranchCompanyUnit,
+  orgStructureContainsDepartment,
+  orgUnitFromPerspective,
+} from "../utils/leaderPerspective";
+import { getOrgStructureLines, ORG_STRUCTURE_CHANGED_EVENT } from "../utils/orgStructureStorage";
+import {
+  loadPlanHistorySnapshots,
+  markPlanHistoryRowsPendingPlan,
+  planHistoryStatusLabel,
+  PLAN_HISTORY_UPDATED_EVENT,
+  restorePlanHistoryRowFromPendingPlan,
+  restorePlanHistoryRowsFromPendingPlanBatch,
+} from "../utils/planHistoryStorage";
+import { isIsoDateString, PENDING_EXPECTED_COMPLETION } from "../utils/taskDueDate";
+import { requestJumpToExtractionHistory } from "../utils/reportCitation";
+
+type TaskMgmtTab = "list" | "planHistory";
+
+function planHistoryRowSelectKey(snapId: string, rowIndex: number) {
+  return `${snapId}\t${rowIndex}`;
+}
 
 function parseReceiverDepartments(s: string): string[] | undefined {
   const parts = s
@@ -18,34 +36,55 @@ function parseReceiverDepartments(s: string): string[] | undefined {
   return parts.length ? parts : undefined;
 }
 
-function makeEmptyForm() {
-  const branches = getBranchCompanyNamesFromOrg();
-  const branch = branches[0] ?? "华林分公司";
-  const ws = WORKSHOPS_BY_BRANCH[branch] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
-  const workshop = ws[0] ?? "造纸一车间";
+function defaultExecutingDepartment(unit: string | null, orgLines: string[]): string {
+  if (unit && isBranchCompanyUnit(unit)) return unit;
+  if (unit) return unit;
+  for (const l of orgLines) {
+    const b = branchRootFromOrgPath(l);
+    if (b) return b;
+  }
+  const branches = orgLines.filter((l) => isBranchCompanyUnit(l));
+  if (branches[0]) return branches[0];
+  return orgLines[0] ?? "";
+}
+
+function makeEmptyForm(perspective: string, orgLines: string[]) {
+  const unit = orgUnitFromPerspective(perspective);
   return {
     initiator: "",
-    department: "",
+    department: unit ?? "",
+    executingDepartment: defaultExecutingDepartment(unit, orgLines),
     category: "安全生产" as TaskCategory,
+    taskMotivation: "",
     description: "",
     expectedCompletion: "",
     status: "进行中" as TaskStatus,
-    branch,
-    workshop: workshop as string | "",
     receiversStr: "",
   };
 }
 
-export function TaskManagement() {
-  const { visibleTasks, addTask, removeTask, updateTask, toggleFollow } = useTasks();
-  const [orgEpoch, setOrgEpoch] = useState(0);
-  const [form, setForm] = useState(makeEmptyForm);
-  const [editing, setEditing] = useState<Task | null>(null);
+function branchWorkshopFromExecuting(executingDepartment: string): { branch: string; workshop: null } {
+  const ed = executingDepartment.trim();
+  if (ed && isBranchCompanyUnit(ed)) return { branch: ed, workshop: null };
+  return { branch: "", workshop: null };
+}
 
-  const branchNames = useMemo(() => {
-    const b = getBranchCompanyNamesFromOrg();
-    return b.length ? b : ["广西分公司", "华林分公司"];
-  }, [orgEpoch]);
+export function TaskManagement() {
+  const { visibleTasks, addTask, removeTask, updateTask, toggleFollow, user } = useTasks();
+  const [taskMgmtTab, setTaskMgmtTab] = useState<TaskMgmtTab>("list");
+  const [planSnapshots, setPlanSnapshots] = useState<PlanHistorySnapshot[]>(() => loadPlanHistorySnapshots());
+  const [orgEpoch, setOrgEpoch] = useState(0);
+  const orgLines = useMemo(() => getOrgStructureLines(), [orgEpoch]);
+  const [form, setForm] = useState(() => makeEmptyForm(user.perspective, orgLines));
+  const [editing, setEditing] = useState<Task | null>(null);
+  const [manualNewTaskOpen, setManualNewTaskOpen] = useState(false);
+  const [manualNewTaskEntered, setManualNewTaskEntered] = useState(false);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [planHistorySelectedKeys, setPlanHistorySelectedKeys] = useState<string[]>([]);
+  const taskListHeaderCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const isGroupPerspective = user.perspective === GROUP_LEADER_PERSPECTIVE;
+  const lockedInitiatorUnit = orgUnitFromPerspective(user.perspective);
 
   useEffect(() => {
     const bump = () => setOrgEpoch((n) => n + 1);
@@ -53,184 +92,249 @@ export function TaskManagement() {
     return () => window.removeEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
   }, []);
 
-  const workshops = WORKSHOPS_BY_BRANCH[form.branch] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
+  useEffect(() => {
+    setForm(makeEmptyForm(user.perspective, getOrgStructureLines()));
+  }, [user.perspective, orgEpoch]);
+
+  useEffect(() => {
+    const bump = () => setPlanSnapshots(loadPlanHistorySnapshots());
+    window.addEventListener(PLAN_HISTORY_UPDATED_EVENT, bump);
+    return () => window.removeEventListener(PLAN_HISTORY_UPDATED_EVENT, bump);
+  }, []);
+
+  useEffect(() => {
+    if (taskMgmtTab === "planHistory") setPlanSnapshots(loadPlanHistorySnapshots());
+  }, [taskMgmtTab]);
+
+  useEffect(() => {
+    if (taskMgmtTab !== "list") {
+      setManualNewTaskOpen(false);
+      setSelectedTaskIds([]);
+    }
+    if (taskMgmtTab !== "planHistory") setPlanHistorySelectedKeys([]);
+  }, [taskMgmtTab]);
+
+  useEffect(() => {
+    setPlanHistorySelectedKeys((prev) =>
+      prev.filter((key) => {
+        const tab = key.indexOf("\t");
+        if (tab < 0) return false;
+        const snapId = key.slice(0, tab);
+        const idx = Number(key.slice(tab + 1));
+        const snap = planSnapshots.find((s) => s.id === snapId);
+        if (!snap || !Number.isFinite(idx) || idx < 0 || idx >= snap.rows.length) return false;
+        return planHistoryStatusLabel(snap.rows[idx]) === "待计划";
+      }),
+    );
+  }, [planSnapshots]);
+
+  const taskListHeaderChecked =
+    visibleTasks.length > 0 && visibleTasks.every((t) => selectedTaskIds.includes(t.id));
+  const taskListHeaderIndeterminate =
+    visibleTasks.length > 0 &&
+    selectedTaskIds.length > 0 &&
+    visibleTasks.some((t) => selectedTaskIds.includes(t.id)) &&
+    !taskListHeaderChecked;
+
+  useEffect(() => {
+    const el = taskListHeaderCheckboxRef.current;
+    if (el) el.indeterminate = taskListHeaderIndeterminate;
+  }, [taskListHeaderIndeterminate]);
+
+  useEffect(() => {
+    if (!manualNewTaskOpen) {
+      setManualNewTaskEntered(false);
+      return;
+    }
+    const id = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => setManualNewTaskEntered(true));
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [manualNewTaskOpen]);
+
+  useEffect(() => {
+    if (!manualNewTaskOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setManualNewTaskOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [manualNewTaskOpen]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.initiator.trim() || !form.department.trim() || !form.description.trim()) {
-      alert("请填写发起人、发起部门与任务描述。");
+    if (!form.initiator.trim() || !form.description.trim()) {
+      alert("请填写发起人与任务描述。");
       return;
     }
-    if (!form.expectedCompletion) {
-      alert("请选择期待完成时间。");
+    if (isGroupPerspective && !form.department.trim()) {
+      alert("请选择发起部门。");
+      return;
+    }
+    if (!isGroupPerspective) {
+      const u = lockedInitiatorUnit?.trim();
+      if (!u || form.department.trim() !== u) {
+        alert("发起部门须与当前视角一致。");
+        return;
+      }
+    }
+    const exec = form.executingDepartment.trim();
+    if (!exec) {
+      alert("请填写或选择执行部门。");
+      return;
+    }
+    if (!isGroupPerspective) {
+      if (!orgStructureContainsDepartment(orgLines, exec)) {
+        alert("执行部门须为部门架构中的职能部门或分公司。");
+        return;
+      }
+    }
+    const dueRaw = form.expectedCompletion.trim();
+    if (!dueRaw) {
+      alert("请填写期待完成时间（YYYY-MM-DD）或「待定」。");
+      return;
+    }
+    if (!isIsoDateString(dueRaw) && dueRaw !== PENDING_EXPECTED_COMPLETION) {
+      alert("期待完成请填写 YYYY-MM-DD 或「待定」。");
       return;
     }
     const receiverDepartments = parseReceiverDepartments(form.receiversStr);
+    const { branch, workshop } = branchWorkshopFromExecuting(exec);
     addTask({
       initiator: form.initiator.trim(),
       department: form.department.trim(),
+      executingDepartment: exec,
       category: form.category,
+      taskMotivation: form.taskMotivation.trim(),
       description: form.description.trim(),
-      expectedCompletion: form.expectedCompletion,
+      expectedCompletion: dueRaw,
       status: form.status,
-      branch: form.branch,
-      workshop: form.workshop ? form.workshop : null,
+      branch,
+      workshop,
       ...(receiverDepartments ? { receiverDepartments } : {}),
     });
-    setForm(makeEmptyForm());
+    setForm(makeEmptyForm(user.perspective, getOrgStructureLines()));
+    setManualNewTaskOpen(false);
   }
 
   return (
     <div className="task-page">
+      <div className="report-main-tabs task-mgmt-tabs" role="tablist" aria-label="任务管理分类">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={taskMgmtTab === "list"}
+          className={`report-main-tab${taskMgmtTab === "list" ? " is-active" : ""}`}
+          onClick={() => setTaskMgmtTab("list")}
+        >
+          任务列表
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={taskMgmtTab === "planHistory"}
+          className={`report-main-tab${taskMgmtTab === "planHistory" ? " is-active" : ""}`}
+          onClick={() => setTaskMgmtTab("planHistory")}
+        >
+          计划历史
+        </button>
+      </div>
+
+      {taskMgmtTab === "list" && (
+        <>
       <section className="card">
-        <div className="card-head">
-          <h2>新建任务</h2>
-          <p className="muted small">
-            字段：发起人、发起部门、接收/配合部门（可选）、类别、描述、期待完成时间；分公司与车间来自配置中的分公司架构。
-          </p>
-        </div>
-        <form className="task-form" onSubmit={submit}>
-          <label>
-            发起人
-            <input
-              value={form.initiator}
-              onChange={(e) => setForm({ ...form, initiator: e.target.value })}
-              placeholder="姓名"
-            />
-          </label>
-          <label>
-            发起部门
-            <input
-              value={form.department}
-              onChange={(e) => setForm({ ...form, department: e.target.value })}
-              placeholder="如：技术部"
-            />
-          </label>
-          <label className="full">
-            接收 / 配合部门（可选，逗号或顿号分隔）
-            <input
-              value={form.receiversStr}
-              onChange={(e) => setForm({ ...form, receiversStr: e.target.value })}
-              placeholder="如：财务部，采购部"
-            />
-          </label>
-          <label>
-            任务类别
-            <select
-              value={form.category}
-              onChange={(e) => setForm({ ...form, category: e.target.value as TaskCategory })}
-            >
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="full">
-            任务描述
-            <textarea
-              rows={3}
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              placeholder="目标、交付物、关键里程碑等"
-            />
-          </label>
-          <label>
-            期待完成时间
-            <input
-              type="date"
-              value={form.expectedCompletion}
-              onChange={(e) => setForm({ ...form, expectedCompletion: e.target.value })}
-            />
-          </label>
-          <label>
-            状态
-            <select
-              value={form.status}
-              onChange={(e) => setForm({ ...form, status: e.target.value as TaskStatus })}
-            >
-              {STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            分公司
-            <select
-              value={form.branch}
-              onChange={(e) => {
-                const b = e.target.value;
-                const ws = WORKSHOPS_BY_BRANCH[b] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
-                setForm({
-                  ...form,
-                  branch: b,
-                  workshop: ws[0] ?? "",
-                });
+        <div className="card-head task-list-card-head">
+          <h2>任务列表（按权限过滤）</h2>
+          <div className="task-list-bulk-actions">
+            <button
+              type="button"
+              className="ghost-btn danger-outline manual-new-task-btn"
+              disabled={selectedTaskIds.length === 0}
+              onClick={() => {
+                const n = selectedTaskIds.length;
+                if (!n) return;
+                if (!confirm(`确定删除选中的 ${n} 条任务？`)) return;
+                for (const id of selectedTaskIds) {
+                  const t = visibleTasks.find((x) => x.id === id);
+                  if (!t) continue;
+                  const src = t.sourcePendingDailyPlanRowId?.trim();
+                  if (src) markPlanHistoryRowsPendingPlan(src);
+                  removeTask(t.id);
+                }
+                setSelectedTaskIds([]);
               }}
             >
-              {branchNames.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            车间（可空表示分公司/部门层级直管）
-            <select
-              value={form.workshop}
-              onChange={(e) => setForm({ ...form, workshop: e.target.value })}
+              批量删除
+            </button>
+            <button
+              type="button"
+              className="primary-btn manual-new-task-btn"
+              onClick={() => setManualNewTaskOpen(true)}
             >
-              <option value="">（无车间 / 直管）</option>
-              {workshops.map((w) => (
-                <option key={w} value={w}>
-                  {w}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="form-actions full">
-            <button type="submit" className="primary-btn">
-              保存任务
+              手工新建任务
             </button>
           </div>
-        </form>
-      </section>
-
-      <section className="card">
-        <div className="card-head">
-          <h2>任务列表（按权限过滤）</h2>
         </div>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
+                <th className="task-table-col-check">
+                  <input
+                    ref={taskListHeaderCheckboxRef}
+                    type="checkbox"
+                    checked={taskListHeaderChecked}
+                    disabled={visibleTasks.length === 0}
+                    onChange={(e) => {
+                      if (e.target.checked) setSelectedTaskIds(visibleTasks.map((t) => t.id));
+                      else setSelectedTaskIds([]);
+                    }}
+                    aria-label="全选当前列表任务"
+                  />
+                </th>
                 <th>编号</th>
                 <th>发起人</th>
                 <th>发起部门</th>
+                <th>执行部门</th>
                 <th>接收/配合</th>
                 <th>类别</th>
+                <th>任务动因</th>
                 <th>描述</th>
                 <th>期待完成</th>
                 <th>状态</th>
-                <th>组织</th>
                 <th />
               </tr>
             </thead>
             <tbody>
               {visibleTasks.map((t) => (
                 <tr key={t.id}>
+                  <td className="task-table-col-check">
+                    <input
+                      type="checkbox"
+                      checked={selectedTaskIds.includes(t.id)}
+                      onChange={() =>
+                        setSelectedTaskIds((prev) =>
+                          prev.includes(t.id) ? prev.filter((x) => x !== t.id) : [...prev, t.id],
+                        )
+                      }
+                      aria-label={`选择任务 ${t.code}`}
+                    />
+                  </td>
                   <td className="mono">{t.code}</td>
                   <td>{t.initiator}</td>
                   <td>{t.department}</td>
+                  <td className="muted tiny">{t.executingDepartment || "—"}</td>
                   <td className="muted tiny">
                     {(t.receiverDepartments?.length ? t.receiverDepartments.join("、") : t.receiverDepartment) || "—"}
                   </td>
                   <td>{t.category}</td>
-                  <td className="clamp wide">{t.description}</td>
+                  <td className="task-text-wrap muted tiny">{t.taskMotivation?.trim() || "—"}</td>
+                  <td className="task-text-wrap">{t.description}</td>
                   <td>{t.expectedCompletion}</td>
                   <td>
                     <select
@@ -247,10 +351,6 @@ export function TaskManagement() {
                       ))}
                     </select>
                   </td>
-                  <td className="muted tiny">
-                    {t.branch}
-                    {t.workshop ? ` / ${t.workshop}` : ""}
-                  </td>
                   <td className="actions">
                     <button type="button" className="text-btn" onClick={() => toggleFollow(t.id)}>
                       {t.followedByUser ? "已关注" : "关注"}
@@ -262,7 +362,11 @@ export function TaskManagement() {
                       type="button"
                       className="text-btn danger"
                       onClick={() => {
-                        if (confirm("确定删除该任务？")) removeTask(t.id);
+                        if (!confirm("确定删除该任务？")) return;
+                        const src = t.sourcePendingDailyPlanRowId?.trim();
+                        if (src) markPlanHistoryRowsPendingPlan(src);
+                        removeTask(t.id);
+                        setSelectedTaskIds((prev) => prev.filter((x) => x !== t.id));
                       }}
                     >
                       删除
@@ -272,8 +376,8 @@ export function TaskManagement() {
               ))}
               {visibleTasks.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="empty-cell">
-                    当前视角与范围下没有可见任务。
+                  <td colSpan={12} className="empty-cell">
+                    当前视角下没有可见任务。
                   </td>
                 </tr>
               )}
@@ -281,6 +385,168 @@ export function TaskManagement() {
           </table>
         </div>
       </section>
+
+      {manualNewTaskOpen && (
+        <div className="task-new-drawer-root">
+          <div
+            className={`task-new-drawer-backdrop${manualNewTaskEntered ? " is-visible" : ""}`}
+            role="presentation"
+            aria-hidden="true"
+            onClick={() => setManualNewTaskOpen(false)}
+          />
+          <aside
+            className={`task-new-drawer-panel${manualNewTaskEntered ? " is-visible" : ""}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="manual-new-task-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="task-new-drawer-toolbar">
+              <h2 id="manual-new-task-title">手工新建任务</h2>
+              <button
+                type="button"
+                className="task-new-drawer-close"
+                aria-label="关闭"
+                onClick={() => setManualNewTaskOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <p className="muted small task-new-drawer-hint">
+              发起部门默认与当前视角一致（集团领导可在架构中任选）；执行部门为任务落地单位；总部职能部门可向其他部门或分公司派发。已不再单独填写分公司与车间。
+            </p>
+            <form className="task-form task-new-drawer-form" onSubmit={submit}>
+              <label>
+                发起人
+                <input
+                  value={form.initiator}
+                  onChange={(e) => setForm({ ...form, initiator: e.target.value })}
+                  placeholder="姓名"
+                />
+              </label>
+              <label>
+                发起部门
+                {isGroupPerspective ? (
+                  <select
+                    value={form.department}
+                    onChange={(e) => setForm({ ...form, department: e.target.value })}
+                    required
+                  >
+                    <option value="">请选择</option>
+                    {orgLines.map((line) => (
+                      <option key={line} value={line}>
+                        {line}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input value={form.department} readOnly className="fld-readonly" title="与当前视角绑定" />
+                )}
+              </label>
+              <label>
+                执行部门
+                {isGroupPerspective ? (
+                  <input
+                    value={form.executingDepartment}
+                    onChange={(e) => setForm({ ...form, executingDepartment: e.target.value })}
+                    placeholder="可填写任意部门或分公司名称"
+                    list="task-exec-org-list"
+                  />
+                ) : (
+                  <select
+                    value={form.executingDepartment}
+                    onChange={(e) => setForm({ ...form, executingDepartment: e.target.value })}
+                    required
+                  >
+                    <option value="">请选择</option>
+                    {orgLines.map((line) => (
+                      <option key={line} value={line}>
+                        {line}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <datalist id="task-exec-org-list">
+                  {orgLines.map((line) => (
+                    <option key={line} value={line} />
+                  ))}
+                </datalist>
+              </label>
+              <label className="full">
+                接收 / 配合部门（可选，逗号或顿号分隔）
+                <input
+                  value={form.receiversStr}
+                  onChange={(e) => setForm({ ...form, receiversStr: e.target.value })}
+                  placeholder="如：财务部，采购部"
+                />
+              </label>
+              <label>
+                任务类别
+                <select
+                  value={form.category}
+                  onChange={(e) => setForm({ ...form, category: e.target.value as TaskCategory })}
+                >
+                  {CATEGORIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="full">
+                任务动因
+                <textarea
+                  rows={2}
+                  value={form.taskMotivation}
+                  onChange={(e) => setForm({ ...form, taskMotivation: e.target.value })}
+                  placeholder="立项背景、触发原因或政策/事件依据（可选）"
+                />
+              </label>
+              <label className="full">
+                任务描述
+                <textarea
+                  rows={3}
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  placeholder="目标、交付物、关键里程碑等"
+                />
+              </label>
+              <label>
+                期待完成时间
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  placeholder="YYYY-MM-DD 或 待定"
+                  value={form.expectedCompletion}
+                  onChange={(e) => setForm({ ...form, expectedCompletion: e.target.value })}
+                />
+              </label>
+              <label>
+                状态
+                <select
+                  value={form.status}
+                  onChange={(e) => setForm({ ...form, status: e.target.value as TaskStatus })}
+                >
+                  {STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="form-actions full">
+                <button type="button" className="ghost-btn" onClick={() => setManualNewTaskOpen(false)}>
+                  取消
+                </button>
+                <button type="submit" className="primary-btn">
+                  保存任务
+                </button>
+              </div>
+            </form>
+          </aside>
+        </div>
+      )}
 
       {editing && (
         <div className="modal-backdrop" role="presentation" onClick={() => setEditing(null)}>
@@ -292,8 +558,10 @@ export function TaskManagement() {
           >
             <h3>编辑任务</h3>
             <EditForm
+              key={editing.id}
               task={editing}
-              branchOptions={branchNames}
+              perspective={user.perspective}
+              orgLines={orgLines}
               onSave={(patch) => {
                 updateTask(editing.id, patch);
                 setEditing(null);
@@ -303,44 +571,265 @@ export function TaskManagement() {
           </div>
         </div>
       )}
+        </>
+      )}
+
+      {taskMgmtTab === "planHistory" && (
+        <section className="card plan-history-section">
+          <div className="card-head">
+            <h2>计划历史</h2>
+          </div>
+          <div className="plan-history-body muted small">
+            <p>
+              在<strong>数据看板 → 任务看板 → 待安排任务</strong>中，每成功生成一条日报计划任务，即在此处追加一条记录（含任务形成日期、任务计划角色）；批量生成全部成功结束后仅弹出提示，不再整表写入。
+            </p>
+            <p>
+              在<strong>任务列表</strong>中删除由日报计划生成的任务时，对应计划历史行会标为<strong>待计划</strong>，看板该行的「生成任务」不会立即恢复；请在下方勾选<strong>待计划</strong>记录后<strong>批量返回计划</strong>，或逐条点击<strong>返回计划</strong>，记录将从计划历史中移除，再到看板生成任务。
+            </p>
+            <p>
+              日报解析与保存仍在<strong>报告</strong>；本 Tab 不展示报告提取历史的正文 / JSON / 时间线。
+            </p>
+          </div>
+          {planSnapshots.length === 0 ? (
+            <p className="muted small">暂无计划历史记录；请在看板对日报计划执行「生成任务」或「批量生成任务」。</p>
+          ) : (
+            <>
+              <div className="plan-history-bulk-bar">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => {
+                    const keys: string[] = [];
+                    for (const snap of planSnapshots) {
+                      snap.rows.forEach((row, idx) => {
+                        if (planHistoryStatusLabel(row) === "待计划") {
+                          keys.push(planHistoryRowSelectKey(snap.id, idx));
+                        }
+                      });
+                    }
+                    setPlanHistorySelectedKeys(keys);
+                  }}
+                >
+                  全选待计划
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  disabled={planHistorySelectedKeys.length === 0}
+                  onClick={() => {
+                    const idSet = new Set<string>();
+                    for (const key of planHistorySelectedKeys) {
+                      const tab = key.indexOf("\t");
+                      if (tab < 0) continue;
+                      const snapId = key.slice(0, tab);
+                      const idx = Number(key.slice(tab + 1));
+                      const snap = planSnapshots.find((s) => s.id === snapId);
+                      if (!snap || !Number.isFinite(idx) || idx < 0 || idx >= snap.rows.length) continue;
+                      const row = snap.rows[idx];
+                      if (planHistoryStatusLabel(row) === "待计划") idSet.add(row.id);
+                    }
+                    const n = idSet.size;
+                    if (!n) {
+                      alert("请先勾选状态为「待计划」的记录。");
+                      return;
+                    }
+                    if (!confirm(`确定将选中的 ${n} 条待计划记录返回看板？对应条目将从计划历史中移除。`)) return;
+                    restorePlanHistoryRowsFromPendingPlanBatch([...idSet]);
+                    setPlanHistorySelectedKeys([]);
+                  }}
+                >
+                  批量返回计划
+                </button>
+                {planHistorySelectedKeys.length > 0 && (
+                  <button type="button" className="ghost-btn" onClick={() => setPlanHistorySelectedKeys([])}>
+                    清除选择
+                  </button>
+                )}
+              </div>
+            <div className="plan-history-snapshots">
+              {planSnapshots.map((snap) => (
+                <article key={snap.id} className="plan-history-snapshot-card">
+                  <p className="plan-history-snapshot-meta">
+                    写入时间{" "}
+                    {new Date(snap.createdAt).toLocaleString("zh-CN", {
+                      year: "numeric",
+                      month: "2-digit",
+                      day: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                    <span className="muted"> · </span>
+                    视角 {snap.perspectiveWhenSaved}
+                  </p>
+                  <div className="table-wrap plan-history-snapshot-table-wrap">
+                    <table className="data-table plan-history-snapshot-table">
+                      <thead>
+                        <tr>
+                          <th className="task-table-col-check" aria-label="选择" />
+                          <th>发起部门</th>
+                          <th>执行部门</th>
+                          <th>发起日期</th>
+                          <th>请求描述</th>
+                          <th>领导指示/建议</th>
+                          <th>任务形成日期</th>
+                          <th>任务计划角色</th>
+                          <th>状态</th>
+                          <th>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {snap.rows.map((row, idx) => {
+                          const st = planHistoryStatusLabel(row);
+                          const selKey = planHistoryRowSelectKey(snap.id, idx);
+                          return (
+                          <tr key={`${snap.id}-${row.id}-${idx}`}>
+                            <td className="task-table-col-check">
+                              <input
+                                type="checkbox"
+                                checked={planHistorySelectedKeys.includes(selKey)}
+                                disabled={st !== "待计划"}
+                                onChange={() =>
+                                  setPlanHistorySelectedKeys((prev) =>
+                                    prev.includes(selKey)
+                                      ? prev.filter((k) => k !== selKey)
+                                      : [...prev, selKey],
+                                  )
+                                }
+                                aria-label={`选择计划行 ${(row.requestDescription ?? "").slice(0, 24)}`}
+                              />
+                            </td>
+                            <td>{row.initiatingDepartment}</td>
+                            <td>{row.executingDepartment}</td>
+                            <td>
+                              <button
+                                type="button"
+                                className="text-btn"
+                                onClick={() =>
+                                  requestJumpToExtractionHistory(row.extractionHistoryId, row.jumpNeedle)
+                                }
+                              >
+                                {formatReportCalendarDateZh(row.reportDate)}
+                              </button>
+                            </td>
+                            <td className="task-text-wrap">{row.requestDescription}</td>
+                            <td className="task-text-wrap muted tiny">{row.leaderInstructionSnapshot || "—"}</td>
+                            <td className="mono tiny">{row.taskFormedOn}</td>
+                            <td className="muted tiny">{row.planRolePerspective}</td>
+                            <td className="tiny">
+                              <span
+                                className={
+                                  st === "待计划" ? "plan-history-status plan-history-status--pending" : "plan-history-status"
+                                }
+                              >
+                                {st}
+                              </span>
+                            </td>
+                            <td className="plan-history-actions">
+                              {st === "待计划" ? (
+                                <button
+                                  type="button"
+                                  className="text-btn"
+                                  onClick={() => {
+                                    restorePlanHistoryRowFromPendingPlan(row.id);
+                                    setPlanHistorySelectedKeys((prev) => prev.filter((k) => k !== selKey));
+                                  }}
+                                >
+                                  返回计划
+                                </button>
+                              ) : (
+                                <span className="muted tiny">—</span>
+                              )}
+                            </td>
+                          </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+              ))}
+            </div>
+            </>
+          )}
+        </section>
+      )}
     </div>
   );
 }
 
 function EditForm({
   task,
-  branchOptions,
+  perspective,
+  orgLines,
   onSave,
   onClose,
 }: {
   task: Task;
-  branchOptions: string[];
+  perspective: string;
+  orgLines: string[];
   onSave: (patch: Partial<Task>) => void;
   onClose: () => void;
 }) {
-  const [draft, setDraft] = useState(task);
+  const [draft, setDraft] = useState(() => ({
+    ...task,
+    taskMotivation: task.taskMotivation?.trim() ?? "",
+  }));
   const [receiversStr, setReceiversStr] = useState(() =>
     task.receiverDepartments?.length
       ? task.receiverDepartments.join("，")
       : (task.receiverDepartment ?? ""),
   );
-  const wsList = WORKSHOPS_BY_BRANCH[draft.branch] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
+
+  const isGroupPerspective = perspective === GROUP_LEADER_PERSPECTIVE;
+  const lockedInitiatorUnit = orgUnitFromPerspective(perspective);
 
   return (
     <form
       className="task-form modal-form"
       onSubmit={(e) => {
         e.preventDefault();
+        if (isGroupPerspective && !draft.department.trim()) {
+          alert("请选择发起部门。");
+          return;
+        }
+        if (!isGroupPerspective) {
+          const u = lockedInitiatorUnit?.trim();
+          if (!u || draft.department.trim() !== u) {
+            alert("发起部门须与当前视角一致。");
+            return;
+          }
+        }
+        const exec = draft.executingDepartment?.trim() ?? "";
+        if (!exec) {
+          alert("请填写或选择执行部门。");
+          return;
+        }
+        if (!isGroupPerspective && !orgStructureContainsDepartment(orgLines, exec)) {
+          alert("执行部门须为部门架构中的职能部门或分公司。");
+          return;
+        }
+        const dueRaw = draft.expectedCompletion.trim();
+        if (!dueRaw) {
+          alert("请填写期待完成时间（YYYY-MM-DD）或「待定」。");
+          return;
+        }
+        if (!isIsoDateString(dueRaw) && dueRaw !== PENDING_EXPECTED_COMPLETION) {
+          alert("期待完成请填写 YYYY-MM-DD 或「待定」。");
+          return;
+        }
         const receiverDepartments = parseReceiverDepartments(receiversStr) ?? [];
+        const { branch, workshop } = branchWorkshopFromExecuting(exec);
         onSave({
           initiator: draft.initiator,
-          department: draft.department,
+          department: draft.department.trim(),
+          executingDepartment: exec,
           category: draft.category,
+          taskMotivation: draft.taskMotivation?.trim() ?? "",
           description: draft.description,
-          expectedCompletion: draft.expectedCompletion,
+          expectedCompletion: dueRaw,
           status: draft.status,
-          branch: draft.branch,
-          workshop: draft.workshop || null,
+          branch,
+          workshop,
           receiverDepartments,
           receiverDepartment: undefined,
         });
@@ -355,10 +844,51 @@ function EditForm({
       </label>
       <label>
         发起部门
-        <input
-          value={draft.department}
-          onChange={(e) => setDraft({ ...draft, department: e.target.value })}
-        />
+        {isGroupPerspective ? (
+          <select
+            value={draft.department}
+            onChange={(e) => setDraft({ ...draft, department: e.target.value })}
+            required
+          >
+            <option value="">请选择</option>
+            {orgLines.map((line) => (
+              <option key={line} value={line}>
+                {line}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input value={draft.department} readOnly className="fld-readonly" />
+        )}
+      </label>
+      <label>
+        执行部门
+        {isGroupPerspective ? (
+          <input
+            value={draft.executingDepartment}
+            onChange={(e) => setDraft({ ...draft, executingDepartment: e.target.value })}
+            placeholder="可填写任意部门或分公司名称"
+            list="task-exec-org-list-edit"
+          />
+        ) : (
+          <select
+            value={draft.executingDepartment}
+            onChange={(e) => setDraft({ ...draft, executingDepartment: e.target.value })}
+            required
+          >
+            <option value="">请选择</option>
+            {orgLines.map((line) => (
+              <option key={line} value={line}>
+                {line}
+              </option>
+            ))}
+          </select>
+        )}
+        <datalist id="task-exec-org-list-edit">
+          {orgLines.map((line) => (
+            <option key={line} value={line} />
+          ))}
+        </datalist>
       </label>
       <label className="full">
         接收 / 配合部门（逗号或顿号分隔）
@@ -382,6 +912,15 @@ function EditForm({
         </select>
       </label>
       <label className="full">
+        任务动因
+        <textarea
+          rows={2}
+          value={draft.taskMotivation}
+          onChange={(e) => setDraft({ ...draft, taskMotivation: e.target.value })}
+          placeholder="立项背景、触发原因或政策/事件依据（可选）"
+        />
+      </label>
+      <label className="full">
         任务描述
         <textarea
           rows={3}
@@ -392,7 +931,10 @@ function EditForm({
       <label>
         期待完成时间
         <input
-          type="date"
+          type="text"
+          inputMode="numeric"
+          autoComplete="off"
+          placeholder="YYYY-MM-DD 或 待定"
           value={draft.expectedCompletion}
           onChange={(e) => setDraft({ ...draft, expectedCompletion: e.target.value })}
         />
@@ -406,41 +948,6 @@ function EditForm({
           {STATUSES.map((s) => (
             <option key={s} value={s}>
               {s}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        分公司
-        <select
-          value={draft.branch}
-          onChange={(e) => {
-            const b = e.target.value;
-            const ws = WORKSHOPS_BY_BRANCH[b] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
-            setDraft({
-              ...draft,
-              branch: b,
-              workshop: ws[0] ?? null,
-            });
-          }}
-        >
-          {branchOptions.map((b) => (
-            <option key={b} value={b}>
-              {b}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        车间
-        <select
-          value={draft.workshop ?? ""}
-          onChange={(e) => setDraft({ ...draft, workshop: e.target.value || null })}
-        >
-          <option value="">（无车间）</option>
-          {wsList.map((w) => (
-            <option key={w} value={w}>
-              {w}
             </option>
           ))}
         </select>

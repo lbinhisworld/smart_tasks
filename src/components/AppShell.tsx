@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useTasks } from "../context/TaskContext";
-import { buildPerspectiveOptions, GROUP_LEADER_PERSPECTIVE } from "../utils/leaderPerspective";
+import { buildPerspectiveOptions } from "../utils/leaderPerspective";
 import { getOrgStructureLines, ORG_STRUCTURE_CHANGED_EVENT } from "../utils/orgStructureStorage";
 import { AppConfigModal } from "./AppConfigModal";
 
@@ -29,8 +29,9 @@ export function AppShell({
   }, []);
 
   useEffect(() => {
+    if (perspectiveOptions.length === 0) return;
     if (!perspectiveOptions.includes(user.perspective)) {
-      setUser({ perspective: perspectiveOptions[0] ?? GROUP_LEADER_PERSPECTIVE });
+      setUser({ perspective: perspectiveOptions[0] });
     }
   }, [perspectiveOptions, user.perspective, setUser]);
 
@@ -44,7 +45,7 @@ export function AppShell({
             <div className="brand-sub">立体贯通：集团 — 职能部门 — 分公司 — 车间</div>
           </div>
         </div>
-        <div className="slogan">夯实基础 · 提质增效 · 安全绿色高质量发展</div>
+        <div className="slogan">长久的环保.长久的企业</div>
         <nav className="main-nav">
           <button
             type="button"
@@ -102,18 +103,27 @@ export function AppShell({
         <span className="role-label">当前视角</span>
         <select
           className="role-select role-select--perspective"
-          value={user.perspective}
+          value={
+            perspectiveOptions.includes(user.perspective)
+              ? user.perspective
+              : perspectiveOptions[0] ?? ""
+          }
           onChange={(e) => setUser({ perspective: e.target.value })}
           aria-label="当前视角"
+          disabled={perspectiveOptions.length === 0}
         >
-          {perspectiveOptions.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
+          {perspectiveOptions.length === 0 ? (
+            <option value="">请在系统配置中维护部门架构</option>
+          ) : (
+            perspectiveOptions.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))
+          )}
         </select>
         <span className="muted tiny role-bar-hint">
-          集团领导看全部；部门领导看本部门发起或接收的任务；职能部门领导可看全部报告；分公司领导仅看本公司任务与报告。
+          选项与系统配置中的部门架构一致。切换视角后，任务与报告的可见范围随发起部门、执行部门、分公司归属及接收方变化。
         </span>
       </div>
 

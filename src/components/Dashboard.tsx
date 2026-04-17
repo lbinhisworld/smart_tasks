@@ -1,20 +1,18 @@
 /**
- * @fileoverview 首页看板：任务维度（范围筛选、风险、环形图）与报告维度（`ReportDashboardTab`）；报告 Tab 切换时刷新 `loadExtractionHistory`。
+ * @fileoverview 首页看板：任务维度（按当前视角、风险、环形图）与报告维度（`ReportDashboardTab`）；报告 Tab 切换时刷新 `loadExtractionHistory`。
  *
  * @module Dashboard
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { DEFAULT_WORKSHOPS_FOR_SCOPE, useTasks, WORKSHOPS_BY_BRANCH } from "../context/TaskContext";
+import { useTasks } from "../context/TaskContext";
 import type { TaskCategory } from "../types/task";
-import {
-  extractionHistoryVisibleForPerspective,
-  getBranchCompanyNamesFromOrg,
-} from "../utils/leaderPerspective";
+import { extractionHistoryVisibleForPerspective } from "../utils/leaderPerspective";
 import { loadExtractionHistory } from "../utils/extractionHistoryStorage";
-import { ORG_STRUCTURE_CHANGED_EVENT } from "../utils/orgStructureStorage";
 import { riskForTask, riskLabel } from "../utils/risk";
+import { isIsoDateString } from "../utils/taskDueDate";
 import { Donut } from "./Donut";
+import { PendingArrangementSection } from "./PendingArrangementSection";
 import { ReportDashboardTab } from "./ReportDashboardTab";
 
 function monthKey(d: Date) {
@@ -38,52 +36,24 @@ type HomeBoardTab = "tasks" | "reports";
 
 /** 默认落地页「看板」；任务与报告双 Tab。 */
 export function Dashboard() {
-  const { visibleTasks, setScopeFilter, scopeFilter, toggleFollow, user } = useTasks();
+  const { visibleTasks, toggleFollow, user } = useTasks();
   const [homeBoardTab, setHomeBoardTab] = useState<HomeBoardTab>("tasks");
   const [reportHistory, setReportHistory] = useState(() => loadExtractionHistory());
   const [reportMonth, setReportMonth] = useState(() => monthKey(new Date()));
-  const [orgEpoch, setOrgEpoch] = useState(0);
 
   useEffect(() => {
-    const bump = () => setOrgEpoch((n) => n + 1);
-    window.addEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
-    return () => window.removeEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
-  }, []);
-
-  useEffect(() => {
-    if (homeBoardTab !== "reports") return;
     setReportHistory(loadExtractionHistory());
   }, [homeBoardTab]);
 
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible" && homeBoardTab === "reports") {
+      if (document.visibilityState === "visible") {
         setReportHistory(loadExtractionHistory());
       }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [homeBoardTab]);
-
-  const branchNamesForScope = useMemo(() => {
-    const b = getBranchCompanyNamesFromOrg();
-    return b.length ? b : ["广西分公司", "华林分公司"];
-  }, [orgEpoch]);
-
-  const scopeOptions = useMemo(() => {
-    const opts: { value: string; label: string }[] = [
-      { value: "all", label: "全集团" },
-      { value: "group", label: "集团 / 职能部门直管" },
-    ];
-    for (const b of branchNamesForScope) {
-      opts.push({ value: `branch:${b}`, label: `分公司 · ${b}` });
-      const ws = WORKSHOPS_BY_BRANCH[b] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
-      for (const w of ws) {
-        opts.push({ value: `workshop:${b}:${w}`, label: `车间 · ${b} / ${w}` });
-      }
-    }
-    return opts;
-  }, [branchNamesForScope]);
+  }, []);
 
   const filteredReportHistory = useMemo(
     () => reportHistory.filter((h) => extractionHistoryVisibleForPerspective(h, user.perspective)),
@@ -98,7 +68,10 @@ export function Dashboard() {
     const nodesDone = nodes.filter((t) => t.status === "已完成").length;
     const today = new Date();
     const delayed = nodes.filter(
-      (t) => t.status !== "已完成" && new Date(t.expectedCompletion) < today,
+      (t) =>
+        t.status !== "已完成" &&
+        isIsoDateString(t.expectedCompletion) &&
+        new Date(t.expectedCompletion) < today,
     ).length;
     return { total, done, going, nodes: nodes.length, nodesDone, delayed };
   }, [visibleTasks, reportMonth]);
@@ -127,9 +100,12 @@ export function Dashboard() {
 
   const pendingList = useMemo(() => {
     const key = monthKey(new Date());
-    return visibleTasks.filter(
-      (t) => t.status !== "已完成" && (inMonth(t.expectedCompletion, key) || t.expectedCompletion < `${key}-01`),
-    );
+    return visibleTasks.filter((t) => {
+      if (t.status === "已完成") return false;
+      const due = t.expectedCompletion;
+      if (inMonth(due, key)) return true;
+      return isIsoDateString(due) && due < `${key}-01`;
+    });
   }, [visibleTasks]);
 
   const following = useMemo(() => visibleTasks.filter((t) => t.followedByUser), [visibleTasks]);
@@ -174,22 +150,12 @@ export function Dashboard() {
           <div className="card-head">
             <h2>重点任务总览</h2>
             <div className="filters">
-              <select
-                className="fld"
-                value={scopeFilter}
-                onChange={(e) => setScopeFilter(e.target.value)}
-              >
-                {scopeOptions.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
               <input
                 className="fld"
                 type="month"
                 value={reportMonth}
                 onChange={(e) => setReportMonth(e.target.value)}
+                aria-label="统计月份"
               />
             </div>
           </div>
@@ -273,6 +239,7 @@ export function Dashboard() {
                   <th>任务编号</th>
                   <th>发起部门</th>
                   <th>风险</th>
+                  <th>任务动因</th>
                   <th>任务描述</th>
                   <th>期待完成</th>
                   <th />
@@ -288,7 +255,8 @@ export function Dashboard() {
                       <td>
                         <span className={`pill risk-${r}`}>{riskLabel(r)}</span>
                       </td>
-                      <td className="clamp">{t.description}</td>
+                      <td className="task-text-wrap muted tiny">{t.taskMotivation?.trim() || "—"}</td>
+                      <td className="task-text-wrap">{t.description}</td>
                       <td>{t.expectedCompletion}</td>
                       <td>
                         <button type="button" className="text-btn" onClick={() => toggleFollow(t.id)}>
@@ -300,7 +268,7 @@ export function Dashboard() {
                 })}
                 {riskRows.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="empty-cell">
+                    <td colSpan={7} className="empty-cell">
                       当前视角下暂无中高风险任务。
                     </td>
                   </tr>
@@ -309,6 +277,11 @@ export function Dashboard() {
             </table>
           </div>
         </section>
+
+        <PendingArrangementSection
+          perspective={user.perspective}
+          extractionHistory={filteredReportHistory}
+        />
 
         <section className="category-row">
           {(Object.keys(CATEGORY_META) as TaskCategory[]).map((cat) => {
@@ -331,7 +304,9 @@ export function Dashboard() {
                 <div className="cat-stats">
                   <span>任务 {subset.length} 条</span>
                   <span className="muted tiny">
-                    {subset[0]?.branch ? `示例组织：${subset[0].branch}` : ""}
+                    {subset[0]?.executingDepartment
+                      ? `示例执行部门：${subset[0].executingDepartment}`
+                      : ""}
                   </span>
                 </div>
                 <Donut
@@ -357,8 +332,8 @@ export function Dashboard() {
               <li key={t.id}>
                 <span className="muted tiny">{t.expectedCompletion}</span>
                 <div>
-                  <strong>{t.branch}</strong>
-                  {t.workshop ? ` · ${t.workshop}` : ""}：{t.description.slice(0, 36)}
+                  <strong>{t.executingDepartment || t.branch || "—"}</strong>
+                  {t.workshop ? `（${t.workshop}）` : ""}：{t.description.slice(0, 36)}
                   {t.description.length > 36 ? "…" : ""}
                 </div>
               </li>

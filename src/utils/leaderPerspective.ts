@@ -10,8 +10,46 @@ import { pickBranchCompany } from "./extractionHistoryGroup";
 /** 顶部固定项，与部门架构配置项区分 */
 export const GROUP_LEADER_PERSPECTIVE = "集团领导";
 
+/**
+ * 架构一行（可为「财务部」或「广西分公司.制浆车间」）→ 视角下拉中的选项值。
+ * 若行名已以「领导」结尾，则不再追加，避免出现「××领导领导」。
+ */
+export function perspectiveLabelFromOrgLine(line: string): string {
+  const t = line.trim();
+  if (!t) return t;
+  if (t.endsWith("领导")) return t;
+  return `${t}领导`;
+}
+
+/** 仅由部门架构配置生成，不自动插入「集团领导」；若架构中含名为「集团领导」的节点，仍会按规则出现在列表中 */
 export function buildPerspectiveOptions(orgLines: string[]): string[] {
-  return [GROUP_LEADER_PERSPECTIVE, ...orgLines.map((line) => `${line}领导`)];
+  return orgLines.map(perspectiveLabelFromOrgLine).filter(Boolean);
+}
+
+/**
+ * 从架构行或视角单位串中解析「所属分公司」根：点路径时取首个以「分公司」结尾的段；否则整段若为分公司名则返回之。
+ */
+export function branchRootFromOrgPath(unitOrLine: string): string | null {
+  const u = unitOrLine.trim();
+  if (!u) return null;
+  for (const seg of u.split(".")) {
+    const s = seg.trim();
+    if (s && isBranchCompanyUnit(s)) return s;
+  }
+  if (isBranchCompanyUnit(u)) return u;
+  return null;
+}
+
+/** 执行部门/发起部门是否出现在架构某一行（含点路径末级或任一段） */
+export function orgStructureContainsDepartment(orgLines: string[], dept: string): boolean {
+  const d = dept.trim();
+  if (!d) return false;
+  return orgLines.some((line) => {
+    const t = line.trim();
+    if (t === d) return true;
+    if (t.endsWith(`.${d}`)) return true;
+    return t.split(".").some((seg) => seg.trim() === d);
+  });
 }
 
 /** 从「财务部领导」得到「财务部」；集团领导返回 null */
@@ -26,7 +64,16 @@ export function isBranchCompanyUnit(unit: string): boolean {
 }
 
 export function getBranchCompanyNamesFromOrg(): string[] {
-  return getOrgStructureLines().filter((l) => isBranchCompanyUnit(l));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of getOrgStructureLines()) {
+    const br = branchRootFromOrgPath(line);
+    if (br && !seen.has(br)) {
+      seen.add(br);
+      out.push(br);
+    }
+  }
+  return out;
 }
 
 function taskInvolvesReceiver(task: Task, unit: string): boolean {
@@ -43,10 +90,26 @@ export function taskVisibleForPerspective(task: Task, perspective: string): bool
   if (perspective === GROUP_LEADER_PERSPECTIVE) return true;
   const unit = orgUnitFromPerspective(perspective);
   if (!unit) return true;
-  if (isBranchCompanyUnit(unit)) {
-    return task.branch.trim() === unit.trim();
+  const branchRoot = branchRootFromOrgPath(unit);
+  if (branchRoot !== null) {
+    const execBranch = taskExecutionBranchForFilter(task);
+    return execBranch === branchRoot;
   }
-  return task.department.trim() === unit.trim() || taskInvolvesReceiver(task, unit.trim());
+  const u = unit.trim();
+  return (
+    task.department.trim() === u ||
+    taskInvolvesReceiver(task, u) ||
+    (task.executingDepartment?.trim() === u)
+  );
+}
+
+/** 执行侧是否落在某分公司（分公司领导可见性、看板分公司范围）。 */
+export function taskExecutionBranchForFilter(task: Task): string | null {
+  const ed = task.executingDepartment?.trim();
+  if (ed && isBranchCompanyUnit(ed)) return ed;
+  const b = task.branch?.trim();
+  if (b && isBranchCompanyUnit(b)) return b;
+  return null;
 }
 
 /**
@@ -59,8 +122,9 @@ export function extractionHistoryVisibleForPerspective(
   if (perspective === GROUP_LEADER_PERSPECTIVE) return true;
   const unit = orgUnitFromPerspective(perspective);
   if (!unit) return true;
-  if (isBranchCompanyUnit(unit)) {
-    return pickBranchCompany(item).trim() === unit.trim();
+  const br = branchRootFromOrgPath(unit);
+  if (br !== null) {
+    return pickBranchCompany(item).trim() === br;
   }
   return true;
 }
@@ -72,6 +136,7 @@ export function extractionHistoryVisibleForPerspective(
 export function reportDashboardLevel1ScopeLabel(perspective: string): string {
   if (perspective === GROUP_LEADER_PERSPECTIVE) return "全部分公司汇总";
   const unit = orgUnitFromPerspective(perspective);
-  if (unit && isBranchCompanyUnit(unit)) return `${unit.trim()}汇总`;
+  const br = unit ? branchRootFromOrgPath(unit) : null;
+  if (br) return `${br}汇总`;
   return "全部分公司汇总";
 }

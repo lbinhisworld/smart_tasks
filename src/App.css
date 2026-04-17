@@ -45,7 +45,8 @@
 
 .slogan {
   grid-column: 1 / -1;
-  font-size: 0.82rem;
+  font-size: 1.05rem;
+  line-height: 1.45;
   opacity: 0.92;
   text-align: center;
 }
@@ -159,6 +160,8 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* 避免宽表格等子内容把看板主列撑出网格（如「待安排任务」双列子卡片） */
+  min-width: 0;
 }
 
 .dash-side {
@@ -729,6 +732,14 @@
   background: #fff;
 }
 
+.fld-readonly {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: #f1f5f9;
+  color: #475569;
+}
+
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -865,6 +876,238 @@
   margin-left: 4px;
 }
 
+.pending-arrange-section {
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.pending-arrange-section .card-head {
+  margin-bottom: 12px;
+}
+
+.pending-arrange-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+}
+
+.pending-sub-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fafbfc;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.pending-sub-card-title {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.pending-sub-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.pending-sub-card-head .pending-sub-card-title {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.pending-sub-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.pending-batch-spinner {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 2px solid #e2e8f0;
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: pending-batch-spin 0.65s linear infinite;
+}
+
+@keyframes pending-batch-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pending-batch-gen-btn {
+  white-space: nowrap;
+}
+
+.pending-sub-table-wrap {
+  margin: 0;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.pending-sub-table {
+  font-size: 0.82rem;
+  width: 100%;
+  table-layout: fixed;
+}
+
+/* 待安排任务：发起/相关部门列约为原等分宽约一半；发起日期列紧凑；描述列占余量 */
+.pending-sub-table.pending-sub-table--pending-tasks th.pending-sub-col-dept,
+.pending-sub-table.pending-sub-table--pending-tasks td.pending-sub-col-dept {
+  width: 14%;
+  max-width: 6.5rem;
+  box-sizing: border-box;
+}
+
+.pending-sub-table.pending-sub-table--pending-tasks th.pending-sub-col-date,
+.pending-sub-table.pending-sub-table--pending-tasks td.pending-sub-col-date {
+  width: 12%;
+  max-width: 7.25rem;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+.pending-sub-table th,
+.pending-sub-table td {
+  vertical-align: top;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 描述列在子卡片宽度内换行/截断（勿用 nowrap + 固定 max-width 撑破双列网格） */
+.pending-sub-table .clamp,
+.pending-sub-table .clamp.wide {
+  max-width: 100%;
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  text-overflow: ellipsis;
+}
+
+/* AI 建议列不用 -webkit-line-clamp，避免与相邻 clamp 列同表布局下偶发高度为 0 导致整列空白 */
+.pending-sub-table td.pending-ai-suggestion-col {
+  display: table-cell;
+  min-width: 6rem;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.pending-sub-table.pending-sub-table--daily-plan-gen th.pending-sub-col-leader,
+.pending-sub-table.pending-sub-table--daily-plan-gen td.pending-sub-col-leader {
+  width: 18%;
+  min-width: 10rem;
+  max-width: 20rem;
+  box-sizing: border-box;
+}
+
+.pending-sub-table.pending-sub-table--daily-plan-gen th.pending-sub-col-gen,
+.pending-sub-table.pending-sub-table--daily-plan-gen td.pending-sub-col-gen {
+  width: 8.25rem;
+  box-sizing: border-box;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.pending-sub-table.pending-sub-table--daily-plan-gen td.pending-sub-col-gen.pending-sub-col-gen--has-task {
+  white-space: normal;
+}
+
+/* 日报计划 · 编号块与「生成任务」按钮：同列宽与圆角；编号可换行完整展示，按钮仍为单行固定高度 */
+.pending-sub-table.pending-sub-table--daily-plan-gen .pending-gen-code,
+.pending-sub-table.pending-sub-table--daily-plan-gen button.pending-gen-task-btn {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+.pending-sub-table.pending-sub-table--daily-plan-gen .pending-gen-code {
+  display: block;
+  border: 1px solid #15803d;
+  background: #15803d;
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  text-align: center;
+  min-height: 2.375rem;
+  height: auto;
+  white-space: normal;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+.pending-sub-table.pending-sub-table--daily-plan-gen button.pending-gen-task-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.375rem;
+  height: 2.375rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: 1px solid var(--primary);
+  background: #fff;
+  color: var(--primary);
+  font-size: 0.8rem;
+}
+
+.pending-sub-table.pending-sub-table--daily-plan-gen button.pending-gen-task-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pending-sub-table input.pending-leader-instruct-input {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  font-size: 0.8rem;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+button.pending-jump-link,
+button.pending-date-to-report {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+button.pending-jump-link:hover,
+button.pending-date-to-report:hover {
+  color: #155dfc;
+}
+
 .table-wrap {
   overflow: auto;
   border: 1px solid var(--border);
@@ -903,6 +1146,20 @@
 
 .clamp.wide {
   max-width: 420px;
+}
+
+/* 任务列表等主表：动因/描述允许多行与显式换行，勿用单行 clamp */
+.data-table td.task-text-wrap {
+  max-width: 420px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+/* 首页「风险预警」表：中间动因/描述列在 420px 基础上放宽约 10%，多占横向展示面积 */
+.risk-section .data-table td.task-text-wrap {
+  max-width: 462px;
 }
 
 .pill {
@@ -1054,6 +1311,260 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.task-page .report-main-tabs.task-mgmt-tabs {
+  margin-bottom: 0;
+}
+
+.task-list-card-head {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.task-list-card-head h2 {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.manual-new-task-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  padding: 8px 14px;
+}
+
+.task-list-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.plan-history-bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.task-table-col-check {
+  width: 42px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.task-table-col-check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.task-table-col-check input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.task-new-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  pointer-events: none;
+}
+
+.task-new-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: rgba(15, 23, 42, 0.4);
+  opacity: 0;
+  transition: opacity 0.22s ease;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.task-new-drawer-backdrop.is-visible {
+  opacity: 1;
+}
+
+.task-new-drawer-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 100%);
+  max-width: 100%;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 32px rgba(15, 23, 42, 0.12);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.task-new-drawer-panel.is-visible {
+  transform: translateX(0);
+}
+
+.task-new-drawer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 0;
+  flex-shrink: 0;
+}
+
+.task-new-drawer-toolbar h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.task-new-drawer-close {
+  border: none;
+  background: #f1f5f9;
+  color: var(--muted);
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.task-new-drawer-close:hover {
+  background: #e2e8f0;
+  color: var(--text);
+}
+
+.task-new-drawer-hint {
+  margin: 0;
+  padding: 8px 18px 12px;
+  flex-shrink: 0;
+  line-height: 1.5;
+}
+
+.task-new-drawer-form {
+  padding: 0 18px 20px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-new-drawer-backdrop,
+  .task-new-drawer-panel {
+    transition: none;
+  }
+
+  .task-new-drawer-backdrop.is-visible {
+    opacity: 1;
+  }
+
+  .task-new-drawer-panel.is-visible {
+    transform: none;
+  }
+}
+
+.plan-history-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  line-height: 1.55;
+}
+
+.plan-history-body p {
+  margin: 0;
+}
+
+.plan-batch-done-backdrop {
+  z-index: 1200;
+}
+
+.plan-batch-done-modal {
+  max-width: 420px;
+  text-align: center;
+}
+
+.plan-batch-done-msg {
+  margin: 0 0 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.plan-batch-done-countdown {
+  margin: 0;
+}
+
+.plan-history-snapshots {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.plan-history-snapshot-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fafbfc;
+}
+
+.plan-history-snapshot-meta {
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.plan-history-snapshot-table-wrap {
+  overflow: auto;
+  max-width: 100%;
+}
+
+.plan-history-snapshot-table {
+  font-size: 0.8rem;
+  width: 100%;
+  min-width: 920px;
+}
+
+.plan-history-status {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.plan-history-status--pending {
+  color: #b45309;
+}
+
+.plan-history-actions {
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.pending-gen-pending-plan {
+  display: inline-block;
+  max-width: 7rem;
+  line-height: 1.35;
+}
+
+.plan-history-snapshot-table th,
+.plan-history-snapshot-table td {
+  vertical-align: top;
+  word-break: break-word;
 }
 
 .task-form {
@@ -1329,6 +1840,14 @@
 .report-page {
   max-width: 1100px;
   margin: 0 auto;
+}
+
+.report-page .report-mgmt-tabs {
+  margin-bottom: 16px;
+}
+
+.report-tab-panel .history-section {
+  margin-top: 0;
 }
 
 .report-manual-label {

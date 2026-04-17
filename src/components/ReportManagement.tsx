@@ -1,5 +1,5 @@
 /**
- * @fileoverview 报告管理页：上传/粘贴正文、调用 LLM 提取结构化 JSON、预览、写入提取历史；处理从看板跳转的焦点与高亮。
+ * @fileoverview 报告管理页：双 Tab「报告提取」（上传/解析/预览/保存）与「提取历史」（时间线、导入导出）；处理从看板跳转的焦点与高亮并切至历史 Tab。
  *
  * **设计要点**
  * - `consumeExtractionFocusFromStorage`：挂载时 `useLayoutEffect` 读一次；另监听 `OPEN_REPORTS_PAGE_EVENT`，在报告页已挂载时也能消费看板「跳转原文」写入的 `sessionStorage`。
@@ -26,6 +26,7 @@ import { extractDateFromPlainText } from "../utils/extractDateFromText";
 import { buildExtractionHistoryTitle } from "../utils/extractionHistoryTitle";
 import { formatLlmStatsParts } from "../utils/formatLlmStats";
 import { extractTextFromFile } from "../utils/extractFileText";
+import { buildPendingTasksFromSavedReport } from "../utils/buildPendingTasksFromSavedReport";
 import { buildQuantitativeMetricCitations } from "../utils/quantitativeMetricCitations";
 import { EXTRACTION_FOCUS_STORAGE_KEY, OPEN_REPORTS_PAGE_EVENT } from "../utils/reportCitation";
 import { extractionHistoryVisibleForPerspective } from "../utils/leaderPerspective";
@@ -42,9 +43,12 @@ import { ReportJsonPreview } from "./ReportJsonPreview";
 
 type Phase = "idle" | "reading" | "calling" | "done" | "error";
 
-/** 懒加载于 `App` 的「报告」路由；内含提取表单与历史列表。 */
+type ReportMgmtTab = "extract" | "history";
+
+/** 懒加载于 `App` 的「报告」路由；双 Tab：报告提取 / 提取历史。 */
 export function ReportManagement() {
   const { user } = useTasks();
+  const [reportMgmtTab, setReportMgmtTab] = useState<ReportMgmtTab>("extract");
   const inputId = useId();
   const importHistoryInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -82,6 +86,7 @@ export function ReportManagement() {
       if (p?.id && typeof p.needle === "string") {
         sessionStorage.removeItem(EXTRACTION_FOCUS_STORAGE_KEY);
         setExtractionFocus(p);
+        setReportMgmtTab("history");
       }
     } catch {
       try {
@@ -232,7 +237,11 @@ export function ReportManagement() {
       llmStats: llmCallStats ?? undefined,
       quantitativeMetricCitations,
     };
-    setHistory(appendExtractionHistory(item));
+    const withPending: ExtractionHistoryItem = {
+      ...item,
+      ...buildPendingTasksFromSavedReport(item),
+    };
+    setHistory(appendExtractionHistory(withPending));
     setExtracted(null);
     setRawModel(null);
     setParsed(null);
@@ -328,35 +337,56 @@ export function ReportManagement() {
     [],
   );
 
+  const historyImportExport = (
+    <>
+      <button type="button" className="ghost-btn tiny-btn" onClick={exportHistory}>
+        导出
+      </button>
+      <button type="button" className="ghost-btn tiny-btn" onClick={() => importHistoryInputRef.current?.click()}>
+        导入
+      </button>
+      <input
+        ref={importHistoryInputRef}
+        id={importHistoryInputId}
+        className="sr-only"
+        type="file"
+        accept=".json,application/json"
+        onChange={(ev) => void onImportHistoryFile(ev)}
+      />
+    </>
+  );
+
   return (
     <div className="report-page">
-      <section className="card">
+      <div className="report-main-tabs report-mgmt-tabs" role="tablist" aria-label="报告管理分类">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={reportMgmtTab === "extract"}
+          className={`report-main-tab${reportMgmtTab === "extract" ? " is-active" : ""}`}
+          onClick={() => setReportMgmtTab("extract")}
+        >
+          报告提取
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={reportMgmtTab === "history"}
+          className={`report-main-tab${reportMgmtTab === "history" ? " is-active" : ""}`}
+          onClick={() => setReportMgmtTab("history")}
+        >
+          提取历史
+        </button>
+      </div>
+
+      {reportMgmtTab === "extract" && (
+      <section className="card report-tab-panel">
         <div className="card-head">
           <div>
-            <h2>报告管理</h2>
+            <h2>报告提取</h2>
             <p className="muted small">
-              上传 Word / PDF / Markdown，或在文本框粘贴日报正文；两种方式二选一，使用提示词提取后展示在下方预览区。
+              上传 Word / PDF / Markdown，或在文本框粘贴日报正文；两种方式二选一，使用提示词提取后展示在下方预览区；保存后请在「提取历史」中查看时间线。
             </p>
-          </div>
-          <div className="report-card-actions">
-            <button type="button" className="ghost-btn" onClick={exportHistory}>
-              导出
-            </button>
-            <button
-              type="button"
-              className="ghost-btn"
-              onClick={() => importHistoryInputRef.current?.click()}
-            >
-              导入
-            </button>
-            <input
-              ref={importHistoryInputRef}
-              id={importHistoryInputId}
-              className="sr-only"
-              type="file"
-              accept=".json,application/json"
-              onChange={(ev) => void onImportHistoryFile(ev)}
-            />
           </div>
         </div>
 
@@ -488,15 +518,21 @@ export function ReportManagement() {
           )}
         </div>
       </section>
+      )}
 
-      <ExtractionHistoryList
-        items={visibleHistory}
-        onRemove={removeHistory}
-        extractionFocus={extractionFocus}
-        onExtractionFocusConsumed={() => setExtractionFocus(null)}
-        citationsRefreshing={citationsRefreshing}
-        onRefreshQuantitativeCitations={refreshAllQuantitativeCitations}
-      />
+      {reportMgmtTab === "history" && (
+        <div className="report-tab-panel">
+          <ExtractionHistoryList
+            items={visibleHistory}
+            onRemove={removeHistory}
+            extractionFocus={extractionFocus}
+            onExtractionFocusConsumed={() => setExtractionFocus(null)}
+            citationsRefreshing={citationsRefreshing}
+            onRefreshQuantitativeCitations={refreshAllQuantitativeCitations}
+            extraTitleActions={historyImportExport}
+          />
+        </div>
+      )}
     </div>
   );
 }

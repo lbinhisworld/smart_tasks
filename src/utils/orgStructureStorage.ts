@@ -40,10 +40,13 @@ export function setOrgStructureText(text: string): void {
   window.dispatchEvent(new Event(ORG_STRUCTURE_CHANGED_EVENT));
 }
 
-/** 非空行列表（用于角色视角下拉等） */
+/** 误存占位（曾用 String(对象) 写入架构） */
+const INVALID_ORG_LINE_PLACEHOLDER = "[object Object]";
+
+/** 非空行列表（用于角色视角下拉等）；过滤误存的 JS 占位串，避免下拉 option key 重复 */
 export function getOrgStructureLines(): string[] {
   return getOrgStructureText()
     .split(/\r?\n/)
     .map((l) => l.trim())
-    .filter(Boolean);
+    .filter((l) => l && l !== INVALID_ORG_LINE_PLACEHOLDER);
 }

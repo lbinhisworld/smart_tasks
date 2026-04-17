@@ -50,4 +50,34 @@ export interface ExtractionHistoryItem {
   parsedJson: unknown | null;
   /** 保存时生成的量化指标 → 原文引用（±50 字）；旧记录可能无此字段 */
   quantitativeMetricCitations?: QuantitativeMetricCitation[];
+  /** 保存时由 `buildPendingTasksFromSavedReport` 生成；旧记录在读存储时补算 */
+  pendingDailyPlanTasks?: PendingDailyPlanTaskRow[];
+  pendingAiSuggestionTasks?: PendingAiSuggestionTaskRow[];
+}
+
+/** 待安排任务 · 日报计划提取（6.1 等协调类）表格行 */
+export interface PendingDailyPlanTaskRow {
+  id: string;
+  initiatingDepartment: string;
+  /** 从请求句推断的承办/被协调方（职能部或分公司下属单位） */
+  executingDepartment: string;
+  /** 日报「提取日期」YYYY-MM-DD，与 JSON 顶层「提取日期」一致 */
+  reportDate: string;
+  requestDescription: string;
+  extractionHistoryId: string;
+  jumpNeedle: string;
+}
+
+/** 待安排任务 · AI 建议（正文问题与文末计划缺口）表格行 */
+export interface PendingAiSuggestionTaskRow {
+  id: string;
+  relatedDepartments: string;
+  /** 日报「提取日期」YYYY-MM-DD */
+  reportDate: string;
+  /** 日报正文「异常归因」等暴露的经营生产问题摘录（不含 AI 套话） */
+  discoveredIssue: string;
+  /** 基于「正文有问题但文末计划未覆盖」给出的计划类建议，单独展示 */
+  aiSuggestion: string;
+  extractionHistoryId: string;
+  jumpNeedle: string;
 }

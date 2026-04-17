@@ -1,10 +1,9 @@
 /**
- * @fileoverview 任务列表与当前用户「视角」的 React Context：本地持久化、按领导视角与范围筛选可见任务。
+ * @fileoverview 任务列表与当前用户「视角」的 React Context：本地持久化、按当前视角过滤可见任务。
  *
  * **设计要点**
  * - `CurrentUser.perspective`：`集团领导` 或配置架构中的 `{名称}领导`。
  * - 任务可见性见 `taskVisibleForPerspective`；报告提取历史见 `extractionHistoryVisibleForPerspective`。
- * - `scopeFilter`：`all` | `group` | `branch:名称` | `workshop:分公司:车间`，在已通过视角过滤的 `tasks` 上再筛一层。
  *
  * @module TaskContext
  */
@@ -19,20 +18,48 @@ import {
   type ReactNode,
 } from "react";
 import { SEED_TASKS } from "../data/seedTasks";
-import { GROUP_LEADER_PERSPECTIVE, taskVisibleForPerspective } from "../utils/leaderPerspective";
+import {
+  GROUP_LEADER_PERSPECTIVE,
+  isBranchCompanyUnit,
+  taskVisibleForPerspective,
+} from "../utils/leaderPerspective";
 import type { CurrentUser, Task, TaskCategory, TaskStatus } from "../types/task";
 
 const STORAGE_KEY = "qifeng_smart_tasks_v1";
 const USER_KEY = "qifeng_smart_tasks_user_v1";
 
+function normalizeStoredTask(t: Task): Task {
+  const execRaw =
+    t.executingDepartment?.trim() ||
+    (() => {
+      const b = t.branch?.trim();
+      if (b && isBranchCompanyUnit(b)) return b;
+      return t.department?.trim() || "";
+    })();
+  let branch = t.branch ?? "";
+  let workshop = t.workshop ?? null;
+  if (isBranchCompanyUnit(execRaw)) {
+    branch = execRaw;
+  } else {
+    branch = "";
+    workshop = null;
+  }
+  const taskMotivation =
+    typeof (t as { taskMotivation?: unknown }).taskMotivation === "string"
+      ? (t as { taskMotivation: string }).taskMotivation.trim()
+      : "";
+  return { ...t, executingDepartment: execRaw, branch, workshop, taskMotivation };
+}
+
 function loadTasks(): Task[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return SEED_TASKS;
+    if (!raw) return SEED_TASKS.map(normalizeStoredTask);
     const parsed = JSON.parse(raw) as Task[];
-    return Array.isArray(parsed) && parsed.length ? parsed : SEED_TASKS;
+    if (!Array.isArray(parsed) || !parsed.length) return SEED_TASKS.map(normalizeStoredTask);
+    return parsed.map((row) => normalizeStoredTask(row as Task));
   } catch {
-    return SEED_TASKS;
+    return SEED_TASKS.map(normalizeStoredTask);
   }
 }
 
@@ -68,9 +95,7 @@ interface TaskContextValue {
   visibleTasks: Task[];
   user: CurrentUser;
   setUser: (u: CurrentUser) => void;
-  scopeFilter: string;
-  setScopeFilter: (s: string) => void;
-  addTask: (input: Omit<Task, "id" | "code" | "createdAt"> & { code?: string }) => void;
+  addTask: (input: Omit<Task, "id" | "code" | "createdAt"> & { code?: string }) => Task;
   updateTask: (id: string, patch: Partial<Task>) => void;
   removeTask: (id: string) => void;
   toggleFollow: (id: string) => void;
@@ -84,7 +109,6 @@ const TaskContext = createContext<TaskContextValue | null>(null);
 export function TaskProvider({ children }: { children: ReactNode }) {
   const [tasks, setTasks] = useState<Task[]>(() => loadTasks());
   const [user, setUserState] = useState<CurrentUser>(() => loadUser());
-  const [scopeFilter, setScopeFilter] = useState<string>("all");
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
@@ -96,32 +120,20 @@ export function TaskProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const visibleTasks = useMemo(() => {
-    return tasks.filter((t) => {
-      if (!taskVisibleForPerspective(t, user.perspective)) return false;
-      if (scopeFilter === "all") return true;
-      if (scopeFilter === "group") return t.workshop === null;
-      if (scopeFilter.startsWith("branch:")) {
-        const b = scopeFilter.slice("branch:".length);
-        return t.branch === b;
-      }
-      if (scopeFilter.startsWith("workshop:")) {
-        const [, branch, workshop] = scopeFilter.split(":");
-        return t.branch === branch && t.workshop === workshop;
-      }
-      return true;
-    });
-  }, [tasks, user.perspective, scopeFilter]);
+    return tasks.filter((t) => taskVisibleForPerspective(t, user.perspective));
+  }, [tasks, user.perspective]);
 
   const addTask = useCallback(
     (
       input: Omit<Task, "id" | "code" | "createdAt"> & {
         code?: string;
       },
-    ) => {
+    ): Task => {
       const id = `t_${Date.now()}`;
+      const deptKey = (input.department?.trim() || "集").slice(0, 2);
+      const execKey = (input.executingDepartment?.trim() || "执").slice(0, 2);
       const code =
-        input.code ??
-        `QF-${input.branch.slice(0, 2)}-${(input.workshop ?? "本部").slice(0, 2)}-${String(tasks.length + 1).padStart(3, "0")}`;
+        input.code ?? `QF-${deptKey}-${execKey}-${String(tasks.length + 1).padStart(3, "0")}`;
       const row: Task = {
         ...input,
         id,
@@ -129,6 +141,7 @@ export function TaskProvider({ children }: { children: ReactNode }) {
         createdAt: new Date().toISOString().slice(0, 10),
       };
       setTasks((prev) => [row, ...prev]);
+      return row;
     },
     [tasks.length],
   );
@@ -153,8 +166,6 @@ export function TaskProvider({ children }: { children: ReactNode }) {
       visibleTasks,
       user,
       setUser,
-      scopeFilter,
-      setScopeFilter,
       addTask,
       updateTask,
       removeTask,
@@ -165,7 +176,6 @@ export function TaskProvider({ children }: { children: ReactNode }) {
       visibleTasks,
       user,
       setUser,
-      scopeFilter,
       addTask,
       updateTask,
       removeTask,
@@ -181,25 +191,6 @@ export function useTasks() {
   if (!ctx) throw new Error("useTasks must be used within TaskProvider");
   return ctx;
 }
-
-/** 看板组织范围下拉的默认车间（配置中未单独维护车间清单时使用） */
-export const DEFAULT_WORKSHOPS_FOR_SCOPE = [
-  "造纸一车间",
-  "造纸二车间",
-  "造纸三车间",
-  "辅料仓库",
-  "环保工段",
-];
-
-export const WORKSHOPS_BY_BRANCH: Record<string, string[]> = {
-  淄博本部: ["造纸一车间", "造纸二车间", "造纸三车间", "辅料仓库", "环保工段"],
-  广西齐峰: ["造纸一车间", "造纸二车间", "环保工段"],
-  广西分公司: ["造纸一车间", "造纸二车间", "环保工段"],
-  华林分公司: ["造纸一车间", "造纸二车间", "造纸三车间", "辅料仓库", "环保工段"],
-  欧华分公司: ["造纸一车间", "造纸二车间", "造纸三车间", "辅料仓库", "环保工段"],
-  欧木分公司: ["造纸一车间", "造纸二车间", "造纸三车间", "辅料仓库", "环保工段"],
-  卫材分公司: ["造纸一车间", "造纸二车间", "环保工段"],
-};
 
 export const CATEGORIES: TaskCategory[] = ["安全生产", "技改项目", "质量与环保"];
 export const STATUSES: TaskStatus[] = ["进行中", "已完成", "实质性进展"];

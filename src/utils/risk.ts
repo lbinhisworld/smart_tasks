@@ -1,7 +1,9 @@
 import type { RiskLevel, Task } from "../types/task";
+import { isIsoDateString } from "./taskDueDate";
 
 export function riskForTask(task: Task, today = new Date()): RiskLevel {
   if (task.status === "已完成") return "low";
+  if (!isIsoDateString(task.expectedCompletion)) return "low";
   const due = new Date(task.expectedCompletion);
   const t = today.getTime();
   if (due.getTime() < t) return "high";

@@ -100,25 +100,15 @@ export interface ProductionReportExtractionResult {
   durationMs: number;
 }
 
-/**
- * 调用聊天补全接口，将日报正文转为结构化 JSON 字符串（模型侧约束为单对象）。
- *
- * @param documentPlainText - 已抽取的纯文本；超长时截断至 `MAX_CHARS`
- * @param env - 端点、密钥、模型名
- * @param extractionDate - 写入用户消息块，要求模型原样写入顶层「提取日期」
- * @throws 非 2xx、空 content、网络错误
- */
-export async function callProductionReportExtraction(
-  documentPlainText: string,
-  env: LlmEnv,
-  extractionDate: string = formatExtractionDate(),
-): Promise<ProductionReportExtractionResult> {
-  const body = documentPlainText.length > MAX_CHARS ? documentPlainText.slice(0, MAX_CHARS) : documentPlainText;
+type ChatRoleMessage = { role: "system" | "user" | "assistant"; content: string };
 
+async function postChatCompletionJson(
+  env: LlmEnv,
+  messages: ChatRoleMessage[],
+  temperature = 0.2,
+): Promise<ProductionReportExtractionResult> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (env.apiKey) headers.Authorization = `Bearer ${env.apiKey}`;
-
-  const dateBlock = `【系统给定】提取日期（YYYY-MM-DD，请原样写入 JSON 顶层「提取日期」；该值已由系统根据「正文可解析日期优先，否则为本次请求当日」确定）：${extractionDate}`;
 
   const t0 = performance.now();
 
@@ -127,19 +117,9 @@ export async function callProductionReportExtraction(
     headers,
     body: JSON.stringify({
       model: env.model,
-      temperature: 0.2,
+      temperature,
       response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content:
-            "你是造纸企业 COO 助手。严格只输出一个 JSON 对象：顶层须含「分公司名称」「提取日期」「production_report」；production_report 下每个一级主题对象内须含与下级并列的字符串键「范围」（分公司或车间名）；其余叶子值为字符串；无信息用「暂无」。不要输出 markdown。",
-        },
-        {
-          role: "user",
-          content: `${REPORT_EXTRACTION_USER_INSTRUCTION}\n\n${dateBlock}\n\n---以下为待分析的日报/报告正文（纯文本）---\n\n${body}`,
-        },
-      ],
+      messages,
     }),
   });
 
@@ -184,6 +164,50 @@ export async function callProductionReportExtraction(
     totalTokens,
     durationMs,
   };
+}
+
+/**
+ * 通用 JSON 对象补全：自定义 system / user，与日报提取共用同一鉴权与端点。
+ */
+export async function callLlmChatJsonObject(
+  env: LlmEnv,
+  systemContent: string,
+  userContent: string,
+): Promise<ProductionReportExtractionResult> {
+  return postChatCompletionJson(env, [
+    { role: "system", content: systemContent },
+    { role: "user", content: userContent },
+  ]);
+}
+
+/**
+ * 调用聊天补全接口，将日报正文转为结构化 JSON 字符串（模型侧约束为单对象）。
+ *
+ * @param documentPlainText - 已抽取的纯文本；超长时截断至 `MAX_CHARS`
+ * @param env - 端点、密钥、模型名
+ * @param extractionDate - 写入用户消息块，要求模型原样写入顶层「提取日期」
+ * @throws 非 2xx、空 content、网络错误
+ */
+export async function callProductionReportExtraction(
+  documentPlainText: string,
+  env: LlmEnv,
+  extractionDate: string = formatExtractionDate(),
+): Promise<ProductionReportExtractionResult> {
+  const body = documentPlainText.length > MAX_CHARS ? documentPlainText.slice(0, MAX_CHARS) : documentPlainText;
+
+  const dateBlock = `【系统给定】提取日期（YYYY-MM-DD，请原样写入 JSON 顶层「提取日期」；该值已由系统根据「正文可解析日期优先，否则为本次请求当日」确定）：${extractionDate}`;
+
+  return postChatCompletionJson(env, [
+    {
+      role: "system",
+      content:
+        "你是造纸企业 COO 助手。严格只输出一个 JSON 对象：顶层须含「分公司名称」「提取日期」「production_report」；production_report 下每个一级主题对象内须含与下级并列的字符串键「范围」（分公司或车间名）；其余叶子值为字符串；无信息用「暂无」。不要输出 markdown。",
+    },
+    {
+      role: "user",
+      content: `${REPORT_EXTRACTION_USER_INSTRUCTION}\n\n${dateBlock}\n\n---以下为待分析的日报/报告正文（纯文本）---\n\n${body}`,
+    },
+  ]);
 }
 
 /** 薄封装 `JSON.parse`；调用方负责 try/catch 或确信输入合法。 */
