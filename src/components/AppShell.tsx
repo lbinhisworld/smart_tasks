@@ -1,19 +1,9 @@
 import type { ReactNode } from "react";
-import { useState } from "react";
-import { useTasks, ROLE_LABELS } from "../context/TaskContext";
-import type { UserRole } from "../types/task";
-import { LlmKeyConfigModal } from "./LlmKeyConfigModal";
-
-const DEPTS = [
-  "集团办公室",
-  "安全环保部",
-  "设备工程部",
-  "技术中心",
-  "质量管理部",
-  "生产管理部",
-];
-
-const BRANCHES_LIST = ["淄博本部", "广西齐峰"] as const;
+import { useEffect, useMemo, useState } from "react";
+import { useTasks } from "../context/TaskContext";
+import { buildPerspectiveOptions, GROUP_LEADER_PERSPECTIVE } from "../utils/leaderPerspective";
+import { getOrgStructureLines, ORG_STRUCTURE_CHANGED_EVENT } from "../utils/orgStructureStorage";
+import { AppConfigModal } from "./AppConfigModal";
 
 export function AppShell({
   children,
@@ -25,7 +15,24 @@ export function AppShell({
   onNav: (p: "board" | "reports" | "tasks") => void;
 }) {
   const { user, setUser } = useTasks();
-  const [llmModalOpen, setLlmModalOpen] = useState(false);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [orgEpoch, setOrgEpoch] = useState(0);
+
+  const perspectiveOptions = useMemo(() => {
+    return buildPerspectiveOptions(getOrgStructureLines());
+  }, [orgEpoch]);
+
+  useEffect(() => {
+    const bump = () => setOrgEpoch((n) => n + 1);
+    window.addEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
+  }, []);
+
+  useEffect(() => {
+    if (!perspectiveOptions.includes(user.perspective)) {
+      setUser({ perspective: perspectiveOptions[0] ?? GROUP_LEADER_PERSPECTIVE });
+    }
+  }, [perspectiveOptions, user.perspective, setUser]);
 
   return (
     <div className="shell">
@@ -41,11 +48,29 @@ export function AppShell({
         <nav className="main-nav">
           <button
             type="button"
-            className="nav-btn nav-config"
-            onClick={() => setLlmModalOpen(true)}
-            title="配置 DeepSeek API Key"
+            className="nav-btn nav-config nav-config-icon"
+            onClick={() => setConfigModalOpen(true)}
+            title="打开系统配置（大模型 Key、部门架构）"
+            aria-label="打开系统配置"
           >
-            模型 Key
+            <svg
+              className="nav-config-gear"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={1.5}
+              stroke="currentColor"
+              width="20"
+              height="20"
+              aria-hidden
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.292.24-.437.613-.43.992a6.723 6.723 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.634 6.634 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.213-1.281Z"
+              />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0Z" />
+            </svg>
           </button>
           <button
             type="button"
@@ -71,96 +96,25 @@ export function AppShell({
         </nav>
       </header>
 
-      <LlmKeyConfigModal open={llmModalOpen} onClose={() => setLlmModalOpen(false)} />
+      <AppConfigModal open={configModalOpen} onClose={() => setConfigModalOpen(false)} />
 
       <div className="role-bar">
         <span className="role-label">当前视角</span>
         <select
-          className="role-select"
-          value={user.role}
-          onChange={(e) => {
-            const role = e.target.value as UserRole;
-            if (role === "chairman") setUser({ role });
-            if (role === "functional") setUser({ role, department: DEPTS[0] });
-            if (role === "branch") setUser({ role, branch: BRANCHES_LIST[0] });
-            if (role === "workshop")
-              setUser({
-                role,
-                branch: BRANCHES_LIST[0],
-                workshop: "造纸一车间",
-              });
-          }}
+          className="role-select role-select--perspective"
+          value={user.perspective}
+          onChange={(e) => setUser({ perspective: e.target.value })}
+          aria-label="当前视角"
         >
-          {(Object.keys(ROLE_LABELS) as UserRole[]).map((r) => (
-            <option key={r} value={r}>
-              {ROLE_LABELS[r]}
+          {perspectiveOptions.map((p) => (
+            <option key={p} value={p}>
+              {p}
             </option>
           ))}
         </select>
-
-        {user.role === "functional" && (
-          <select
-            className="role-select"
-            value={user.department ?? DEPTS[0]}
-            onChange={(e) => setUser({ ...user, department: e.target.value })}
-          >
-            {DEPTS.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {user.role === "branch" && (
-          <select
-            className="role-select"
-            value={user.branch ?? BRANCHES_LIST[0]}
-            onChange={(e) => setUser({ ...user, branch: e.target.value })}
-          >
-            {BRANCHES_LIST.map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {user.role === "workshop" && (
-          <>
-            <select
-              className="role-select"
-              value={user.branch ?? BRANCHES_LIST[0]}
-              onChange={(e) =>
-                setUser({
-                  ...user,
-                  branch: e.target.value,
-                  workshop: "造纸一车间",
-                })
-              }
-            >
-              {BRANCHES_LIST.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </select>
-            <select
-              className="role-select"
-              value={user.workshop ?? "造纸一车间"}
-              onChange={(e) => setUser({ ...user, workshop: e.target.value })}
-            >
-              {(user.branch === "广西齐峰"
-                ? ["造纸一车间", "造纸二车间", "环保工段"]
-                : ["造纸一车间", "造纸二车间", "造纸三车间", "辅料仓库", "环保工段"]
-              ).map((w) => (
-                <option key={w} value={w}>
-                  {w}
-                </option>
-              ))}
-            </select>
-          </>
-        )}
+        <span className="muted tiny role-bar-hint">
+          集团领导看全部；部门领导看本部门发起或接收的任务；职能部门领导可看全部报告；分公司领导仅看本公司任务与报告。
+        </span>
       </div>
 
       <main className="main-area">{children}</main>

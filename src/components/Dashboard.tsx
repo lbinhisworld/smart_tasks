@@ -1,8 +1,21 @@
-import { useMemo, useState } from "react";
-import { BRANCHES, useTasks, WORKSHOPS_BY_BRANCH } from "../context/TaskContext";
+/**
+ * @fileoverview 首页看板：任务维度（范围筛选、风险、环形图）与报告维度（`ReportDashboardTab`）；报告 Tab 切换时刷新 `loadExtractionHistory`。
+ *
+ * @module Dashboard
+ */
+
+import { useEffect, useMemo, useState } from "react";
+import { DEFAULT_WORKSHOPS_FOR_SCOPE, useTasks, WORKSHOPS_BY_BRANCH } from "../context/TaskContext";
 import type { TaskCategory } from "../types/task";
+import {
+  extractionHistoryVisibleForPerspective,
+  getBranchCompanyNamesFromOrg,
+} from "../utils/leaderPerspective";
+import { loadExtractionHistory } from "../utils/extractionHistoryStorage";
+import { ORG_STRUCTURE_CHANGED_EVENT } from "../utils/orgStructureStorage";
 import { riskForTask, riskLabel } from "../utils/risk";
 import { Donut } from "./Donut";
+import { ReportDashboardTab } from "./ReportDashboardTab";
 
 function monthKey(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -21,23 +34,61 @@ const CATEGORY_META: Record<
   质量与环保: { title: "质量与环保任务", subtitle: "客户质量、排放与体系审核" },
 };
 
+type HomeBoardTab = "tasks" | "reports";
+
+/** 默认落地页「看板」；任务与报告双 Tab。 */
 export function Dashboard() {
-  const { visibleTasks, setScopeFilter, scopeFilter, toggleFollow } = useTasks();
+  const { visibleTasks, setScopeFilter, scopeFilter, toggleFollow, user } = useTasks();
+  const [homeBoardTab, setHomeBoardTab] = useState<HomeBoardTab>("tasks");
+  const [reportHistory, setReportHistory] = useState(() => loadExtractionHistory());
   const [reportMonth, setReportMonth] = useState(() => monthKey(new Date()));
+  const [orgEpoch, setOrgEpoch] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setOrgEpoch((n) => n + 1);
+    window.addEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
+  }, []);
+
+  useEffect(() => {
+    if (homeBoardTab !== "reports") return;
+    setReportHistory(loadExtractionHistory());
+  }, [homeBoardTab]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && homeBoardTab === "reports") {
+        setReportHistory(loadExtractionHistory());
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [homeBoardTab]);
+
+  const branchNamesForScope = useMemo(() => {
+    const b = getBranchCompanyNamesFromOrg();
+    return b.length ? b : ["广西分公司", "华林分公司"];
+  }, [orgEpoch]);
 
   const scopeOptions = useMemo(() => {
     const opts: { value: string; label: string }[] = [
       { value: "all", label: "全集团" },
       { value: "group", label: "集团 / 职能部门直管" },
     ];
-    for (const b of BRANCHES) {
+    for (const b of branchNamesForScope) {
       opts.push({ value: `branch:${b}`, label: `分公司 · ${b}` });
-      for (const w of WORKSHOPS_BY_BRANCH[b] ?? []) {
+      const ws = WORKSHOPS_BY_BRANCH[b] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
+      for (const w of ws) {
         opts.push({ value: `workshop:${b}:${w}`, label: `车间 · ${b} / ${w}` });
       }
     }
     return opts;
-  }, []);
+  }, [branchNamesForScope]);
+
+  const filteredReportHistory = useMemo(
+    () => reportHistory.filter((h) => extractionHistoryVisibleForPerspective(h, user.perspective)),
+    [reportHistory, user.perspective],
+  );
 
   const kpis = useMemo(() => {
     const total = visibleTasks.length;
@@ -92,7 +143,32 @@ export function Dashboard() {
   };
 
   return (
-    <div className="dashboard">
+    <div className="home-dash">
+      <div className="report-main-tabs home-dash-subtabs" role="tablist" aria-label="数据看板分类">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={homeBoardTab === "tasks"}
+          className={`report-main-tab${homeBoardTab === "tasks" ? " is-active" : ""}`}
+          onClick={() => setHomeBoardTab("tasks")}
+        >
+          任务看板
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={homeBoardTab === "reports"}
+          className={`report-main-tab${homeBoardTab === "reports" ? " is-active" : ""}`}
+          onClick={() => setHomeBoardTab("reports")}
+        >
+          报告看板
+        </button>
+      </div>
+
+      {homeBoardTab === "reports" ? (
+        <ReportDashboardTab history={filteredReportHistory} perspective={user.perspective} />
+      ) : (
+        <div className="dashboard">
       <div className="dash-main">
         <section className="card kpi-section">
           <div className="card-head">
@@ -312,6 +388,8 @@ export function Dashboard() {
           </ul>
         </div>
       </aside>
+        </div>
+      )}
     </div>
   );
 }

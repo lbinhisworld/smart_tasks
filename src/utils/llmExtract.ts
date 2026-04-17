@@ -1,3 +1,15 @@
+/**
+ * @fileoverview LLM 调用与生产日报结构化提取：环境读取（DeepSeek 优先 / 构建变量回退）、`fetch` 请求、JSON 规范化。
+ *
+ * **设计要点**
+ * - `readLlmEnv`：用户若在界面保存 DeepSeek Key，则走 dev 代理 `/api/deepseek` 或直连官方 URL；否则读 `VITE_*` 兼容旧部署。
+ * - `callProductionReportExtraction`：正文截断 `MAX_CHARS`；`response_format: json_object`；系统提示约束顶层字段形状，用户消息拼接固定提取说明与「提取日期」块。
+ * - `normalizeProductionReportJson`：落库前补全/覆盖顶层「分公司名称」「提取日期」，避免模型漏字段导致看板/时间线断裂。
+ * - Key 变更通过 `LLM_CONFIG_CHANGED_EVENT` 广播，配置弹窗与提取页可同步刷新。
+ *
+ * @module llmExtract
+ */
+
 import { REPORT_EXTRACTION_USER_INSTRUCTION } from "../constants/reportExtractionPrompt";
 
 export interface LlmEnv {
@@ -56,7 +68,10 @@ function readLlmEnvFromBuildEnv(): LlmEnv | null {
   return { apiUrl, apiKey: apiKey.trim(), model };
 }
 
-/** 优先使用界面保存的 DeepSeek Key；否则回退到构建时环境变量（兼容旧配置）。 */
+/**
+ * 解析当前可用的 LLM 环境：优先界面持久化的 DeepSeek Key，否则 `VITE_LLM_*`；开发期可 `VITE_LLM_VIA_PROXY=1` 走 `/api/llm`。
+ * @returns 未配置任何可用密钥/代理时 `null`
+ */
 export function readLlmEnv(): LlmEnv | null {
   const ds = getStoredDeepseekApiKey();
   if (ds) {
@@ -85,6 +100,14 @@ export interface ProductionReportExtractionResult {
   durationMs: number;
 }
 
+/**
+ * 调用聊天补全接口，将日报正文转为结构化 JSON 字符串（模型侧约束为单对象）。
+ *
+ * @param documentPlainText - 已抽取的纯文本；超长时截断至 `MAX_CHARS`
+ * @param env - 端点、密钥、模型名
+ * @param extractionDate - 写入用户消息块，要求模型原样写入顶层「提取日期」
+ * @throws 非 2xx、空 content、网络错误
+ */
 export async function callProductionReportExtraction(
   documentPlainText: string,
   env: LlmEnv,
@@ -110,7 +133,7 @@ export async function callProductionReportExtraction(
         {
           role: "system",
           content:
-            "你是造纸企业 COO 助手。严格只输出一个 JSON 对象：顶层须含「分公司名称」「提取日期」「production_report」；production_report 内叶子值为字符串；无信息用「暂无」。不要输出 markdown。",
+            "你是造纸企业 COO 助手。严格只输出一个 JSON 对象：顶层须含「分公司名称」「提取日期」「production_report」；production_report 下每个一级主题对象内须含与下级并列的字符串键「范围」（分公司或车间名）；其余叶子值为字符串；无信息用「暂无」。不要输出 markdown。",
         },
         {
           role: "user",
@@ -163,12 +186,16 @@ export async function callProductionReportExtraction(
   };
 }
 
+/** 薄封装 `JSON.parse`；调用方负责 try/catch 或确信输入合法。 */
 export function parseJsonSafe(raw: string): unknown {
   const s = raw.trim();
   return JSON.parse(s) as unknown;
 }
 
-/** 保证顶层含「分公司名称」「提取日期」；分公司名缺省为「暂无」；提取日期以本次解析的本地日期为准。 */
+/**
+ * 解析模型输出字符串，保证顶层含「分公司名称」「提取日期」；解析失败时原样返回 `raw`。
+ * 「提取日期」强制为入参 `extractionDate`，与请求阶段约定一致。
+ */
 export function normalizeProductionReportJson(raw: string, extractionDate: string): string {
   try {
     const o = JSON.parse(raw.trim()) as Record<string, unknown>;

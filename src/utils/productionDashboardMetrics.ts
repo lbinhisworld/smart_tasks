@@ -1,3 +1,15 @@
+/**
+ * @fileoverview 报告「产量看板」数据层：从已保存的提取历史 JSON 中抽取车间日产量，并按分公司 / 全集团聚合。
+ *
+ * **设计要点**
+ * - 解析路径固定为 `production_report → 2. 生产能效… → 2.1 产量达成分析`，键名通过 `findChildBlock` 做模糊匹配，容忍模型键名轻微漂移。
+ * - 车间节点下必须存在「当日产量(吨)」或「当日产量」对象，内含计划/实际/偏差等字符串字段；数值经 `parseMetricNumber` 清洗（去单位、逗号、「暂无」）。
+ * - 同一提取日、同一分公司下多条历史记录的车间行会先 `mergeWorkshopsByName` 再汇总，避免重复车间双计。
+ * - `buildDayCapacityDashboard` 输出 `DayCapacityDashboard`：全量合并后的 `daySummary` 与各 `companies[]`，供 UI 树三级展示。
+ *
+ * @module productionDashboardMetrics
+ */
+
 import type { ExtractionHistoryItem } from "../types/extractionHistory";
 import { pickBranchCompany, pickExtractionDate } from "./extractionHistoryGroup";
 
@@ -21,6 +33,10 @@ export interface WorkshopDayMetrics {
   ratePercent: number | null;
 }
 
+/**
+ * 优先使用已解析对象 `parsedJson`；否则尝试解析 `rawModelResponse`，失败返回 `null`。
+ * 看板与归档逻辑均依赖此入口，避免各处重复 JSON.parse。
+ */
 export function getReportJsonRoot(item: ExtractionHistoryItem): Record<string, unknown> | null {
   if (item.parsedJson != null && isRecord(item.parsedJson)) return item.parsedJson;
   try {
@@ -31,6 +47,9 @@ export function getReportJsonRoot(item: ExtractionHistoryItem): Record<string, u
   }
 }
 
+/**
+ * 将模型返回的中文数字串转为 `number`；无法解析或语义为「暂无」时返回 `null`，聚合时用 `null` 表示缺数而非 0。
+ */
 export function parseMetricNumber(s: unknown): number | null {
   if (typeof s !== "string") return null;
   const t = s.trim();
@@ -59,7 +78,10 @@ function findChildBlock(
   return null;
 }
 
-/** 从 production_report 中定位「2.1 产量达成分析」对象（键名允许轻微漂移） */
+/**
+ * 从 `production_report` 逐级下钻到「2.1 产量达成分析」区块。
+ * @returns 以**车间名为键**、车间节点为值的对象；其下再解析「当日产量」结构。找不到任一层则 `null`。
+ */
 export function findYieldAnalysisSection(root: Record<string, unknown>): Record<string, unknown> | null {
   const pr = root["production_report"];
   if (!isRecord(pr)) return null;
@@ -82,6 +104,9 @@ function extractWorkshopDayMetrics(workshopName: string, v: Record<string, unkno
   return { workshopName, plan, actual, deviation, ratePercent };
 }
 
+/**
+ * 遍历产量达成分析下的每个子键，跳过非对象项，对每个车间构造 `WorkshopDayMetrics`。
+ */
 export function extractWorkshopsFromRoot(root: Record<string, unknown> | null): WorkshopDayMetrics[] {
   if (!root) return [];
   const yieldSec = findYieldAnalysisSection(root);
@@ -95,7 +120,9 @@ export function extractWorkshopsFromRoot(root: Record<string, unknown> | null): 
   return out;
 }
 
-/** 同名车间计划/实际相加（同日多条记录时） */
+/**
+ * 同名车间合并：计划、实际按数值相加；偏差与达成率由合并后的计划/实际**重算**，保证与展示公式一致。
+ */
 export function mergeWorkshopsByName(rows: WorkshopDayMetrics[]): WorkshopDayMetrics[] {
   const acc = new Map<string, { plan: number | null; actual: number | null }>();
   for (const w of rows) {
@@ -113,6 +140,9 @@ export function mergeWorkshopsByName(rows: WorkshopDayMetrics[]): WorkshopDayMet
   });
 }
 
+/**
+ * 多车间行汇总为一张 KPI 卡片：计划/实际为可求和字段之和；偏差 = 实际和 − 计划和；产能率 = 实际和/计划和×100（计划和为 0 时无率）。
+ */
 export function aggregateWorkshopMetrics(rows: WorkshopDayMetrics[]): CapacityMetricSnapshot {
   let planSum = 0;
   let actualSum = 0;
@@ -152,6 +182,13 @@ export interface DayCapacityDashboard {
   hasYieldData: boolean;
 }
 
+/**
+ * 构建某日「产量看板」完整模型。
+ *
+ * @param items - 全部提取历史（函数内按 `pickExtractionDate` 过滤 `viewDate`）
+ * @param viewDate - 看板当前选择的日历日 YYYY-MM-DD
+ * @returns 含集团日汇总、各分公司 summary + workshops；`hasYieldData` 表示该日是否解析到至少一条车间产量
+ */
 export function buildDayCapacityDashboard(
   items: ExtractionHistoryItem[],
   viewDate: string,

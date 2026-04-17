@@ -1,10 +1,24 @@
+/**
+ * @fileoverview 提取历史在「时间线 / 看板」维度的公共字段抽取：提取日期、分公司名、按日分组。
+ *
+ * **设计要点**
+ * - `pickExtractionDate` / `pickBranchCompany` 均优先读 `parsedJson`，失败再 `JSON.parse(rawModelResponse)`，与存储时是否预解析无关。
+ * - 分公司名中的 `/`、`\` 统一替换为 `·`，与 UI 与 `reportCitation` 中的锚定逻辑一致。
+ * - `buildTimelineGroups` 按提取日期聚合，日内按 `savedAt` 降序，供报告管理时间线展示。
+ *
+ * @module extractionHistoryGroup
+ */
+
 import type { ExtractionHistoryItem } from "../types/extractionHistory";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** 从记录中读取「提取日期」YYYY-MM-DD，缺省用保存时间日期 */
+/**
+ * 从记录中读取「提取日期」`YYYY-MM-DD`。
+ * 顶层 JSON 字段「提取日期」须通过正则校验；否则退回 `savedAt` 的日期部分（前 10 位）。
+ */
 export function pickExtractionDate(item: ExtractionHistoryItem): string {
   const from = (o: Record<string, unknown>) => {
     const d = o["提取日期"];
@@ -27,7 +41,9 @@ export function pickExtractionDate(item: ExtractionHistoryItem): string {
   return item.savedAt.slice(0, 10);
 }
 
-/** 从记录中读取「分公司名称」 */
+/**
+ * 从记录中读取「分公司名称」；缺失或非字符串时为「暂无」，并做路径分隔符规范化。
+ */
 export function pickBranchCompany(item: ExtractionHistoryItem): string {
   const from = (o: Record<string, unknown>) => {
     const b = o["分公司名称"];
@@ -55,7 +71,10 @@ export interface TimelineDateGroup {
   branchCount: number;
 }
 
-/** 按提取日期降序；同一日期内记录按保存时间降序；摘要统计涉及的分公司个数 */
+/**
+ * 按提取日期降序；同一日期内记录按 `savedAt` 降序。
+ * `branchCount` 为当日去重分公司数，仅用于摘要展示。
+ */
 export function buildTimelineGroups(items: ExtractionHistoryItem[]): TimelineDateGroup[] {
   const byDate = new Map<string, ExtractionHistoryItem[]>();
   for (const item of items) {

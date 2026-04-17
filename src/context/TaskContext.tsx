@@ -1,3 +1,14 @@
+/**
+ * @fileoverview 任务列表与当前用户「视角」的 React Context：本地持久化、按领导视角与范围筛选可见任务。
+ *
+ * **设计要点**
+ * - `CurrentUser.perspective`：`集团领导` 或配置架构中的 `{名称}领导`。
+ * - 任务可见性见 `taskVisibleForPerspective`；报告提取历史见 `extractionHistoryVisibleForPerspective`。
+ * - `scopeFilter`：`all` | `group` | `branch:名称` | `workshop:分公司:车间`，在已通过视角过滤的 `tasks` 上再筛一层。
+ *
+ * @module TaskContext
+ */
+
 import {
   createContext,
   useCallback,
@@ -8,7 +19,8 @@ import {
   type ReactNode,
 } from "react";
 import { SEED_TASKS } from "../data/seedTasks";
-import type { CurrentUser, Task, TaskCategory, TaskStatus, UserRole } from "../types/task";
+import { GROUP_LEADER_PERSPECTIVE, taskVisibleForPerspective } from "../utils/leaderPerspective";
+import type { CurrentUser, Task, TaskCategory, TaskStatus } from "../types/task";
 
 const STORAGE_KEY = "qifeng_smart_tasks_v1";
 const USER_KEY = "qifeng_smart_tasks_user_v1";
@@ -24,31 +36,31 @@ function loadTasks(): Task[] {
   }
 }
 
+function migrateLegacyUser(raw: unknown): CurrentUser {
+  if (raw && typeof raw === "object" && raw !== null && "perspective" in raw) {
+    const p = (raw as { perspective?: unknown }).perspective;
+    if (typeof p === "string" && p.trim()) return { perspective: p.trim() };
+  }
+  const o = raw as Record<string, unknown> | null;
+  if (!o) return { perspective: GROUP_LEADER_PERSPECTIVE };
+  const role = o.role as string | undefined;
+  const department = typeof o.department === "string" ? o.department : "";
+  const branch = typeof o.branch === "string" ? o.branch : "";
+  if (role === "chairman") return { perspective: GROUP_LEADER_PERSPECTIVE };
+  if (role === "functional" && department) return { perspective: `${department}领导` };
+  if (role === "branch" && branch) return { perspective: `${branch}领导` };
+  if (role === "workshop" && branch) return { perspective: `${branch}领导` };
+  return { perspective: GROUP_LEADER_PERSPECTIVE };
+}
+
 function loadUser(): CurrentUser {
   try {
     const raw = localStorage.getItem(USER_KEY);
-    if (raw) return JSON.parse(raw) as CurrentUser;
+    if (raw) return migrateLegacyUser(JSON.parse(raw) as unknown);
   } catch {
     /* ignore */
   }
-  return {
-    role: "chairman",
-  };
-}
-
-function taskVisibleForUser(task: Task, user: CurrentUser): boolean {
-  if (user.role === "chairman") return true;
-  if (user.role === "functional") {
-    return user.department ? task.department === user.department : true;
-  }
-  if (user.role === "branch") {
-    return user.branch ? task.branch === user.branch : true;
-  }
-  if (user.role === "workshop") {
-    if (!user.branch || !user.workshop) return false;
-    return task.branch === user.branch && task.workshop === user.workshop;
-  }
-  return true;
+  return { perspective: GROUP_LEADER_PERSPECTIVE };
 }
 
 interface TaskContextValue {
@@ -66,6 +78,9 @@ interface TaskContextValue {
 
 const TaskContext = createContext<TaskContextValue | null>(null);
 
+/**
+ * 挂载任务状态与持久化；应在应用根部包裹一次。
+ */
 export function TaskProvider({ children }: { children: ReactNode }) {
   const [tasks, setTasks] = useState<Task[]>(() => loadTasks());
   const [user, setUserState] = useState<CurrentUser>(() => loadUser());
@@ -82,7 +97,7 @@ export function TaskProvider({ children }: { children: ReactNode }) {
 
   const visibleTasks = useMemo(() => {
     return tasks.filter((t) => {
-      if (!taskVisibleForUser(t, user)) return false;
+      if (!taskVisibleForPerspective(t, user.perspective)) return false;
       if (scopeFilter === "all") return true;
       if (scopeFilter === "group") return t.workshop === null;
       if (scopeFilter.startsWith("branch:")) {
@@ -95,7 +110,7 @@ export function TaskProvider({ children }: { children: ReactNode }) {
       }
       return true;
     });
-  }, [tasks, user, scopeFilter]);
+  }, [tasks, user.perspective, scopeFilter]);
 
   const addTask = useCallback(
     (
@@ -167,17 +182,23 @@ export function useTasks() {
   return ctx;
 }
 
-export const ROLE_LABELS: Record<UserRole, string> = {
-  chairman: "董事长 / 集团领导",
-  functional: "职能部门",
-  branch: "分公司负责人",
-  workshop: "车间负责人",
-};
+/** 看板组织范围下拉的默认车间（配置中未单独维护车间清单时使用） */
+export const DEFAULT_WORKSHOPS_FOR_SCOPE = [
+  "造纸一车间",
+  "造纸二车间",
+  "造纸三车间",
+  "辅料仓库",
+  "环保工段",
+];
 
-export const BRANCHES = ["淄博本部", "广西齐峰"] as const;
 export const WORKSHOPS_BY_BRANCH: Record<string, string[]> = {
   淄博本部: ["造纸一车间", "造纸二车间", "造纸三车间", "辅料仓库", "环保工段"],
   广西齐峰: ["造纸一车间", "造纸二车间", "环保工段"],
+  广西分公司: ["造纸一车间", "造纸二车间", "环保工段"],
+  华林分公司: ["造纸一车间", "造纸二车间", "造纸三车间", "辅料仓库", "环保工段"],
+  欧华分公司: ["造纸一车间", "造纸二车间", "造纸三车间", "辅料仓库", "环保工段"],
+  欧木分公司: ["造纸一车间", "造纸二车间", "造纸三车间", "辅料仓库", "环保工段"],
+  卫材分公司: ["造纸一车间", "造纸二车间", "环保工段"],
 };
 
 export const CATEGORIES: TaskCategory[] = ["安全生产", "技改项目", "质量与环保"];

@@ -1,6 +1,11 @@
 /**
- * 从日报正文中尝试解析「报告日期」。
- * 命中多个时取文中**首次**出现的合法日期（从左到右阅读顺序）。
+ * @fileoverview 从日报正文中尝试解析「报告日期」`YYYY-MM-DD`，供 LLM 提取请求与模型顶层「提取日期」对齐。
+ *
+ * **设计要点**
+ * - 命中多个时取文中**首次**出现的合法日期（从左到右阅读顺序）。
+ * - 依次尝试 ISO、中文「年月日」、斜杠/点分隔；年份限制在 1990–2100，并用 `Date` 校验真实日历日。
+ *
+ * @module extractDateFromText
  */
 
 function pad2(n: number) {
@@ -18,7 +23,10 @@ function toIso(y: number, m: number, d: number): string | null {
   return `${y}-${pad2(m)}-${pad2(d)}`;
 }
 
-/** 返回 YYYY-MM-DD 或 null */
+/**
+ * @param text - 日报/报告纯文本
+ * @returns 首个合法日历日 `YYYY-MM-DD`，无法解析时 `null`
+ */
 export function extractDateFromPlainText(text: string): string | null {
   const s = text?.trim();
   if (!s) return null;

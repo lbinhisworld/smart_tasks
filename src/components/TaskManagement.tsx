@@ -1,30 +1,59 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  BRANCHES,
   CATEGORIES,
+  DEFAULT_WORKSHOPS_FOR_SCOPE,
   STATUSES,
   useTasks,
   WORKSHOPS_BY_BRANCH,
 } from "../context/TaskContext";
 import type { Task, TaskCategory, TaskStatus } from "../types/task";
+import { getBranchCompanyNamesFromOrg } from "../utils/leaderPerspective";
+import { ORG_STRUCTURE_CHANGED_EVENT } from "../utils/orgStructureStorage";
 
-const emptyForm = {
-  initiator: "",
-  department: "",
-  category: "安全生产" as TaskCategory,
-  description: "",
-  expectedCompletion: "",
-  status: "进行中" as TaskStatus,
-  branch: "淄博本部",
-  workshop: "造纸一车间" as string | "",
-};
+function parseReceiverDepartments(s: string): string[] | undefined {
+  const parts = s
+    .split(/[,，;；\n]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  return parts.length ? parts : undefined;
+}
+
+function makeEmptyForm() {
+  const branches = getBranchCompanyNamesFromOrg();
+  const branch = branches[0] ?? "华林分公司";
+  const ws = WORKSHOPS_BY_BRANCH[branch] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
+  const workshop = ws[0] ?? "造纸一车间";
+  return {
+    initiator: "",
+    department: "",
+    category: "安全生产" as TaskCategory,
+    description: "",
+    expectedCompletion: "",
+    status: "进行中" as TaskStatus,
+    branch,
+    workshop: workshop as string | "",
+    receiversStr: "",
+  };
+}
 
 export function TaskManagement() {
   const { visibleTasks, addTask, removeTask, updateTask, toggleFollow } = useTasks();
-  const [form, setForm] = useState(emptyForm);
+  const [orgEpoch, setOrgEpoch] = useState(0);
+  const [form, setForm] = useState(makeEmptyForm);
   const [editing, setEditing] = useState<Task | null>(null);
 
-  const workshops = WORKSHOPS_BY_BRANCH[form.branch] ?? [];
+  const branchNames = useMemo(() => {
+    const b = getBranchCompanyNamesFromOrg();
+    return b.length ? b : ["广西分公司", "华林分公司"];
+  }, [orgEpoch]);
+
+  useEffect(() => {
+    const bump = () => setOrgEpoch((n) => n + 1);
+    window.addEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
+  }, []);
+
+  const workshops = WORKSHOPS_BY_BRANCH[form.branch] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -36,6 +65,7 @@ export function TaskManagement() {
       alert("请选择期待完成时间。");
       return;
     }
+    const receiverDepartments = parseReceiverDepartments(form.receiversStr);
     addTask({
       initiator: form.initiator.trim(),
       department: form.department.trim(),
@@ -45,8 +75,9 @@ export function TaskManagement() {
       status: form.status,
       branch: form.branch,
       workshop: form.workshop ? form.workshop : null,
+      ...(receiverDepartments ? { receiverDepartments } : {}),
     });
-    setForm({ ...emptyForm, branch: form.branch, workshop: form.workshop || "造纸一车间" });
+    setForm(makeEmptyForm());
   }
 
   return (
@@ -54,7 +85,9 @@ export function TaskManagement() {
       <section className="card">
         <div className="card-head">
           <h2>新建任务</h2>
-          <p className="muted small">字段：发起人、发起部门、类别、描述、期待完成时间（状态与组织用于看板统计）</p>
+          <p className="muted small">
+            字段：发起人、发起部门、接收/配合部门（可选）、类别、描述、期待完成时间；分公司与车间来自配置中的分公司架构。
+          </p>
         </div>
         <form className="task-form" onSubmit={submit}>
           <label>
@@ -70,7 +103,15 @@ export function TaskManagement() {
             <input
               value={form.department}
               onChange={(e) => setForm({ ...form, department: e.target.value })}
-              placeholder="如：质量管理部"
+              placeholder="如：技术部"
+            />
+          </label>
+          <label className="full">
+            接收 / 配合部门（可选，逗号或顿号分隔）
+            <input
+              value={form.receiversStr}
+              onChange={(e) => setForm({ ...form, receiversStr: e.target.value })}
+              placeholder="如：财务部，采购部"
             />
           </label>
           <label>
@@ -120,15 +161,17 @@ export function TaskManagement() {
             分公司
             <select
               value={form.branch}
-              onChange={(e) =>
+              onChange={(e) => {
+                const b = e.target.value;
+                const ws = WORKSHOPS_BY_BRANCH[b] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
                 setForm({
                   ...form,
-                  branch: e.target.value,
-                  workshop: (WORKSHOPS_BY_BRANCH[e.target.value] ?? [])[0] ?? "",
-                })
-              }
+                  branch: b,
+                  workshop: ws[0] ?? "",
+                });
+              }}
             >
-              {BRANCHES.map((b) => (
+              {branchNames.map((b) => (
                 <option key={b} value={b}>
                   {b}
                 </option>
@@ -168,6 +211,7 @@ export function TaskManagement() {
                 <th>编号</th>
                 <th>发起人</th>
                 <th>发起部门</th>
+                <th>接收/配合</th>
                 <th>类别</th>
                 <th>描述</th>
                 <th>期待完成</th>
@@ -182,6 +226,9 @@ export function TaskManagement() {
                   <td className="mono">{t.code}</td>
                   <td>{t.initiator}</td>
                   <td>{t.department}</td>
+                  <td className="muted tiny">
+                    {(t.receiverDepartments?.length ? t.receiverDepartments.join("、") : t.receiverDepartment) || "—"}
+                  </td>
                   <td>{t.category}</td>
                   <td className="clamp wide">{t.description}</td>
                   <td>{t.expectedCompletion}</td>
@@ -225,8 +272,8 @@ export function TaskManagement() {
               ))}
               {visibleTasks.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="empty-cell">
-                    当前角色与范围下没有可见任务。
+                  <td colSpan={10} className="empty-cell">
+                    当前视角与范围下没有可见任务。
                   </td>
                 </tr>
               )}
@@ -246,6 +293,7 @@ export function TaskManagement() {
             <h3>编辑任务</h3>
             <EditForm
               task={editing}
+              branchOptions={branchNames}
               onSave={(patch) => {
                 updateTask(editing.id, patch);
                 setEditing(null);
@@ -261,21 +309,29 @@ export function TaskManagement() {
 
 function EditForm({
   task,
+  branchOptions,
   onSave,
   onClose,
 }: {
   task: Task;
+  branchOptions: string[];
   onSave: (patch: Partial<Task>) => void;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState(task);
-  const wsList = WORKSHOPS_BY_BRANCH[draft.branch] ?? [];
+  const [receiversStr, setReceiversStr] = useState(() =>
+    task.receiverDepartments?.length
+      ? task.receiverDepartments.join("，")
+      : (task.receiverDepartment ?? ""),
+  );
+  const wsList = WORKSHOPS_BY_BRANCH[draft.branch] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
 
   return (
     <form
       className="task-form modal-form"
       onSubmit={(e) => {
         e.preventDefault();
+        const receiverDepartments = parseReceiverDepartments(receiversStr) ?? [];
         onSave({
           initiator: draft.initiator,
           department: draft.department,
@@ -285,6 +341,8 @@ function EditForm({
           status: draft.status,
           branch: draft.branch,
           workshop: draft.workshop || null,
+          receiverDepartments,
+          receiverDepartment: undefined,
         });
       }}
     >
@@ -300,6 +358,14 @@ function EditForm({
         <input
           value={draft.department}
           onChange={(e) => setDraft({ ...draft, department: e.target.value })}
+        />
+      </label>
+      <label className="full">
+        接收 / 配合部门（逗号或顿号分隔）
+        <input
+          value={receiversStr}
+          onChange={(e) => setReceiversStr(e.target.value)}
+          placeholder="留空表示无"
         />
       </label>
       <label>
@@ -348,15 +414,17 @@ function EditForm({
         分公司
         <select
           value={draft.branch}
-          onChange={(e) =>
+          onChange={(e) => {
+            const b = e.target.value;
+            const ws = WORKSHOPS_BY_BRANCH[b] ?? DEFAULT_WORKSHOPS_FOR_SCOPE;
             setDraft({
               ...draft,
-              branch: e.target.value,
-              workshop: (WORKSHOPS_BY_BRANCH[e.target.value] ?? [])[0] ?? null,
-            })
-          }
+              branch: b,
+              workshop: ws[0] ?? null,
+            });
+          }}
         >
-          {BRANCHES.map((b) => (
+          {branchOptions.map((b) => (
             <option key={b} value={b}>
               {b}
             </option>

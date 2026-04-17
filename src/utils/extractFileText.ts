@@ -1,3 +1,14 @@
+/**
+ * @fileoverview 上传文件 → 纯文本：按扩展名分支（Markdown / PDF / DOCX），供报告提取管线消费。
+ *
+ * **设计要点**
+ * - PDF 使用 `pdfjs-dist` 逐页 `getTextContent` 拼接；扫描件无文字层时返回空并带 `note`。
+ * - `.doc` 不支持，明确提示转 `.docx`。
+ * - `pdf.worker` 通过 Vite `?url` 注入，避免打包路径问题。
+ *
+ * @module extractFileText
+ */
+
 import mammoth from "mammoth";
 import * as pdfjs from "pdfjs-dist";
 // Vite: bundle worker as separate URL
@@ -10,6 +21,10 @@ function extOf(name: string) {
   return i >= 0 ? name.slice(i + 1).toLowerCase() : "";
 }
 
+/**
+ * @param file - 浏览器 `File`，根据扩展名路由
+ * @returns `text` 为抽取正文；`note` 仅在空结果或不支持类型时给出用户可读说明
+ */
 export async function extractTextFromFile(file: File): Promise<{ text: string; note?: string }> {
   const ext = extOf(file.name);
 

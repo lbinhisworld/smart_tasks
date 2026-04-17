@@ -1,10 +1,20 @@
+/**
+ * @fileoverview 提取历史列表默认标题：`YYYY-MM-DD-分公司名`，与分组键 `pickExtractionDate` / `pickBranchCompany` 语义对齐。
+ *
+ * @module extractionHistoryTitle
+ */
+
 import { formatExtractionDate } from "./llmExtract";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** 从解析结果得到「YYYY-MM-DD-分公司名」；无法解析时返回 null。 */
+/**
+ * 从解析结果得到 `YYYY-MM-DD-分公司名`。
+ * 日期非法时回退为 `formatExtractionDate()`（当前本地日）；分公司名规则与 `pickBranchCompany` 一致。
+ * @returns 无法得到对象结构时 `null`（调用方可改用文件名等兜底）
+ */
 export function buildExtractionHistoryTitle(
   parsedJson: unknown | null,
   rawModelResponse: string,

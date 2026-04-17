@@ -1,4 +1,15 @@
-import { useCallback, useMemo, useState } from "react";
+/**
+ * @fileoverview 首页「报告看板」Tab：按提取日展示集团 / 分公司 / 车间三级产量树与 KPI 瓷片，并驱动原文引用侧栏与跳转历史。
+ *
+ * **设计要点**
+ * - 数据来自 `buildDayCapacityDashboard`；日期轴选项来自 `buildTimelineGroups` 的日期键。
+ * - 点击指标瓷片调用 `openCitation`：优先用提取记录 `quantitativeMetricCitations` 中对应行的 `excerpt`；否则回退 `buildQuotedCitationExcerpt`；高亮区间为多段（与引用提取表一致）。
+ * - 「跳转原文」委托 `requestJumpToExtractionHistory`，与 `ReportManagement` 中 `sessionStorage` 消费配合。
+ *
+ * @module ReportDashboardTab
+ */
+
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import type { ExtractionHistoryItem } from "../types/extractionHistory";
 import { buildTimelineGroups } from "../utils/extractionHistoryGroup";
 import {
@@ -7,7 +18,18 @@ import {
   type CapacityMetricSnapshot,
   type WorkshopDayMetrics,
 } from "../utils/productionDashboardMetrics";
+import {
+  buildQuotedCitationExcerpt,
+  CITATION_METRIC_LABELS,
+  type CitationMetricId,
+  pickHistorySourceItem,
+  requestJumpToExtractionHistory,
+  type ReportCitationPayload,
+  tryBuildCitationFromStoredQuantitative,
+} from "../utils/reportCitation";
 import { formatExtractionDate } from "../utils/llmExtract";
+import { reportDashboardLevel1ScopeLabel } from "../utils/leaderPerspective";
+import { ReportCitationDrawer } from "./ReportCitationDrawer";
 
 function formatRate(p: number | null): string {
   if (p == null || !Number.isFinite(p)) return "暂无";
@@ -32,49 +54,178 @@ function deviationToneClass(n: number | null): string {
   return "";
 }
 
+/** 与瓷片展示一致的可选字符串，用于在摘录中定位「当前点击」那一项的数值（优先长串匹配）。 */
+function buildCitationHighlightPhrases(metric: CitationMetricId, snap: CapacityMetricSnapshot): string[] {
+  const phrases: string[] = [];
+  const push = (s: string) => {
+    const t = s.trim();
+    if (t && t !== "暂无") phrases.push(t);
+  };
+
+  switch (metric) {
+    case "capacity": {
+      push(formatRate(snap.capacityRatePercent));
+      const p = snap.capacityRatePercent;
+      if (p != null && Number.isFinite(p)) {
+        push(`${p.toFixed(1)}%`);
+        push(`${p.toFixed(2)}%`);
+      }
+      break;
+    }
+    case "plan": {
+      push(formatTons(snap.planTons));
+      const v = snap.planTons;
+      if (v != null && Number.isFinite(v)) {
+        push(`${v.toFixed(2)} 吨`);
+        push(`${v.toFixed(2)}吨`);
+        if (Number.isInteger(v)) {
+          push(`${v} 吨`);
+          push(`${v}吨`);
+        }
+      }
+      break;
+    }
+    case "actual": {
+      push(formatTons(snap.actualTons));
+      const v = snap.actualTons;
+      if (v != null && Number.isFinite(v)) {
+        push(`${v.toFixed(2)} 吨`);
+        push(`${v.toFixed(2)}吨`);
+        if (Number.isInteger(v)) {
+          push(`${v} 吨`);
+          push(`${v}吨`);
+        }
+      }
+      break;
+    }
+    case "deviation": {
+      push(formatDeviation(snap.deviationTons));
+      const v = snap.deviationTons;
+      if (v != null && Number.isFinite(v)) {
+        const sign = v > 0 ? "+" : "";
+        push(`${sign}${v.toFixed(2)} 吨`);
+        push(`${sign}${v.toFixed(2)}吨`);
+        push(`${v.toFixed(2)} 吨`);
+        push(`${v.toFixed(2)}吨`);
+        if (Number.isInteger(v)) {
+          push(`${sign}${v} 吨`);
+          push(`${v} 吨`);
+        }
+      }
+      break;
+    }
+  }
+
+  return [...new Set(phrases)];
+}
+
+function findHighlightRangeInQuoted(
+  quoted: string,
+  phrases: string[],
+): { start: number; end: number } | null {
+  if (phrases.length === 0) return null;
+  const sorted = [...phrases].sort((a, b) => b.length - a.length);
+  for (const p of sorted) {
+    const i = quoted.indexOf(p);
+    if (i >= 0) return { start: i, end: i + p.length };
+  }
+  for (const p of sorted) {
+    const noComma = p.replace(/,/g, "");
+    if (noComma === p) continue;
+    const i = quoted.indexOf(noComma);
+    if (i >= 0) return { start: i, end: i + noComma.length };
+  }
+  return null;
+}
+
 function MetricTiles({
   snap,
   dense,
   level = 1,
+  onMetricClick,
 }: {
   snap: CapacityMetricSnapshot;
   dense?: boolean;
-  /** 1=当日汇总卡片，2=分公司，3=车间 */
   level?: 1 | 2 | 3;
+  onMetricClick?: (metric: CitationMetricId, snap: CapacityMetricSnapshot) => void;
 }) {
   const gridClass = [
     dense ? "report-dash-metric-grid report-dash-metric-grid--dense" : "report-dash-metric-grid",
     `report-dash-metric-grid--level${level}`,
-  ].join(" ");
+    onMetricClick ? " report-dash-metric-grid--clickable" : "",
+  ]
+    .join(" ")
+    .trim();
+
+  const wrap = (metric: CitationMetricId, className: string, inner: ReactNode) => {
+    if (onMetricClick) {
+      return (
+        <button
+          type="button"
+          className={[className, "report-dash-metric", "report-dash-metric--tile-btn"].filter(Boolean).join(" ")}
+          onClick={(e) => {
+            e.stopPropagation();
+            onMetricClick(metric, snap);
+          }}
+        >
+          {inner}
+        </button>
+      );
+    }
+    return <div className={[className, "report-dash-metric"].filter(Boolean).join(" ")}>{inner}</div>;
+  };
+
   return (
     <div className={gridClass}>
-      <div className="report-dash-metric kpi-green">
-        <div className="report-dash-metric-label">当日产能达成</div>
-        <div className="report-dash-metric-value">{formatRate(snap.capacityRatePercent)}</div>
-      </div>
-      <div className="report-dash-metric kpi-blue">
-        <div className="report-dash-metric-label">计划达成</div>
-        <div className="report-dash-metric-value">{formatTons(snap.planTons)}</div>
-      </div>
-      <div className="report-dash-metric kpi-blue">
-        <div className="report-dash-metric-label">实际达成</div>
-        <div className="report-dash-metric-value">{formatTons(snap.actualTons)}</div>
-      </div>
-      <div className="report-dash-metric">
-        <div className="report-dash-metric-label">偏差值</div>
-        <div
-          className={["report-dash-metric-value", deviationToneClass(snap.deviationTons)]
-            .filter(Boolean)
-            .join(" ")}
-        >
-          {formatDeviation(snap.deviationTons)}
-        </div>
-      </div>
+      {wrap(
+        "capacity",
+        "kpi-green",
+        <>
+          <div className="report-dash-metric-label">当日产能达成</div>
+          <div className="report-dash-metric-value">{formatRate(snap.capacityRatePercent)}</div>
+        </>,
+      )}
+      {wrap(
+        "plan",
+        "kpi-blue",
+        <>
+          <div className="report-dash-metric-label">计划达成</div>
+          <div className="report-dash-metric-value">{formatTons(snap.planTons)}</div>
+        </>,
+      )}
+      {wrap(
+        "actual",
+        "kpi-blue",
+        <>
+          <div className="report-dash-metric-label">实际达成</div>
+          <div className="report-dash-metric-value">{formatTons(snap.actualTons)}</div>
+        </>,
+      )}
+      {wrap(
+        "deviation",
+        "",
+        <>
+          <div className="report-dash-metric-label">偏差值</div>
+          <div
+            className={["report-dash-metric-value", deviationToneClass(snap.deviationTons)]
+              .filter(Boolean)
+              .join(" ")}
+          >
+            {formatDeviation(snap.deviationTons)}
+          </div>
+        </>,
+      )}
     </div>
   );
 }
 
-function WorkshopRows({ workshops }: { workshops: WorkshopDayMetrics[] }) {
+function WorkshopRows({
+  workshops,
+  onMetricClick,
+}: {
+  workshops: WorkshopDayMetrics[];
+  onMetricClick: (workshopName: string, metric: CitationMetricId, snap: CapacityMetricSnapshot) => void;
+}) {
   if (workshops.length === 0) {
     return <p className="muted small report-dash-nested-empty">未解析到车间当日产量结构。</p>;
   }
@@ -94,7 +245,12 @@ function WorkshopRows({ workshops }: { workshops: WorkshopDayMetrics[] }) {
               </div>
               <div className="report-dash-workshop-card report-dash-tree-card--level3">
                 <div className="report-dash-workshop-name">{w.workshopName}</div>
-                <MetricTiles snap={snap} dense level={3} />
+                <MetricTiles
+                  snap={snap}
+                  dense
+                  level={3}
+                  onMetricClick={(m, snap) => onMetricClick(w.workshopName, m, snap)}
+                />
               </div>
             </div>
           </li>
@@ -104,14 +260,30 @@ function WorkshopRows({ workshops }: { workshops: WorkshopDayMetrics[] }) {
   );
 }
 
-export function ReportDashboardTab({ history }: { history: ExtractionHistoryItem[] }) {
+/**
+ * @param history - 当前内存中的提取历史（父级已按视角过滤）
+ * @param perspective - 当前视角，用于一级汇总卡片括号内说明
+ */
+export function ReportDashboardTab({
+  history,
+  perspective,
+}: {
+  history: ExtractionHistoryItem[];
+  perspective: string;
+}) {
   const [viewDate, setViewDate] = useState(() => formatExtractionDate(new Date()));
   const [companiesOpen, setCompaniesOpen] = useState(false);
   const [openCompany, setOpenCompany] = useState<string | null>(null);
 
+  const [citationOpen, setCitationOpen] = useState(false);
+  const [citationCollapsed, setCitationCollapsed] = useState(false);
+  const [citationPayload, setCitationPayload] = useState<ReportCitationPayload | null>(null);
+
   const timelineDates = useMemo(() => buildTimelineGroups(history).map((g) => g.date), [history]);
 
   const model = useMemo(() => buildDayCapacityDashboard(history, viewDate), [history, viewDate]);
+
+  const level1ScopeLabel = useMemo(() => reportDashboardLevel1ScopeLabel(perspective), [perspective]);
 
   const toggleCompaniesPanel = useCallback(() => {
     setCompaniesOpen((o) => {
@@ -124,6 +296,63 @@ export function ReportDashboardTab({ history }: { history: ExtractionHistoryItem
   const toggleCompanyRow = useCallback((name: string) => {
     setOpenCompany((prev) => (prev === name ? null : name));
   }, []);
+
+  const openCitation = useCallback(
+    (
+      metric: CitationMetricId,
+      ctx: { level: 1 | 2 | 3; companyName?: string; workshopName?: string },
+      snap: CapacityMetricSnapshot,
+    ) => {
+      const companyName =
+        ctx.level === 1 ? null : ctx.companyName != null ? ctx.companyName : null;
+      const workshopName = ctx.level === 3 ? ctx.workshopName ?? null : null;
+      const highlightPhrases = buildCitationHighlightPhrases(metric, snap);
+      const source = pickHistorySourceItem(history, viewDate, companyName, workshopName, highlightPhrases);
+      const text = source?.originalText ?? "";
+      const stored =
+        source != null ? tryBuildCitationFromStoredQuantitative(source, metric, workshopName, highlightPhrases) : null;
+      let quotedExcerpt: string;
+      let jumpNeedle: string;
+      let citationHighlightRanges: { start: number; end: number }[];
+      if (stored) {
+        quotedExcerpt = stored.quotedExcerpt;
+        jumpNeedle = stored.jumpNeedle;
+        citationHighlightRanges = stored.citationHighlightRanges;
+      } else {
+        const { quoted, jumpNeedle: jn } = buildQuotedCitationExcerpt(text, {
+          metric,
+          workshopName,
+          companyName: companyName ?? undefined,
+          centerOnPhrases: highlightPhrases,
+          maxLen: 280,
+          viewDate,
+        });
+        quotedExcerpt = quoted;
+        jumpNeedle = jn;
+        const single = findHighlightRangeInQuoted(quoted, highlightPhrases);
+        citationHighlightRanges = single ? [single] : [];
+      }
+      const displayCompany =
+        ctx.level === 1 ? "全集团汇总" : ctx.companyName ?? "—";
+      setCitationPayload({
+        viewDate,
+        displayCompany,
+        metricLabel: CITATION_METRIC_LABELS[metric],
+        quotedExcerpt,
+        sourceItemId: source?.id ?? null,
+        jumpNeedle,
+        citationHighlightRanges,
+      });
+      setCitationOpen(true);
+      setCitationCollapsed(false);
+    },
+    [history, viewDate],
+  );
+
+  const handleJumpToHistory = useCallback(() => {
+    if (!citationPayload?.sourceItemId) return;
+    requestJumpToExtractionHistory(citationPayload.sourceItemId, citationPayload.jumpNeedle);
+  }, [citationPayload]);
 
   return (
     <div className="report-dashboard-tab">
@@ -157,21 +386,31 @@ export function ReportDashboardTab({ history }: { history: ExtractionHistoryItem
 
       <div className="report-dash-tree">
         <div className="report-dash-tree-node report-dash-tree-node--level1">
-          <button
-            type="button"
-            className={`report-dash-summary-trigger report-dash-tree-card--level1${companiesOpen ? " is-open" : ""}`}
-            onClick={toggleCompaniesPanel}
-            aria-expanded={companiesOpen}
+          <div
+            className={`report-dash-summary-card report-dash-tree-card--level1${companiesOpen ? " is-open" : ""}`}
           >
-            <div className="report-dash-summary-head">
-              <span className="report-dash-summary-title">当日产量指标（全部分公司汇总）</span>
-              <span className="report-dash-chevron" aria-hidden>
-                {companiesOpen ? "▲" : "▼"}
-              </span>
+            <button
+              type="button"
+              className="report-dash-summary-toggle"
+              onClick={toggleCompaniesPanel}
+              aria-expanded={companiesOpen}
+            >
+              <div className="report-dash-summary-head">
+                <span className="report-dash-summary-title">当日产量指标（{level1ScopeLabel}）</span>
+                <span className="report-dash-chevron" aria-hidden>
+                  {companiesOpen ? "▲" : "▼"}
+                </span>
+              </div>
+            </button>
+            <div className="report-dash-summary-metrics">
+              <MetricTiles
+                snap={model.daySummary}
+                level={1}
+                onMetricClick={(m, snap) => openCitation(m, { level: 1 }, snap)}
+              />
             </div>
-            <MetricTiles snap={model.daySummary} level={1} />
-            <span className="muted tiny report-dash-summary-hint">点击整块展开各分公司明细</span>
-          </button>
+            <span className="muted tiny report-dash-summary-hint">点击标题展开各分公司明细；点击指标格查看原文引用。</span>
+          </div>
         </div>
 
         {companiesOpen && (
@@ -197,25 +436,43 @@ export function ReportDashboardTab({ history }: { history: ExtractionHistoryItem
                             <span className="report-dash-tree-node-btn-inner" aria-hidden />
                           </button>
                         </div>
-                        <button
-                          type="button"
-                          className={`report-dash-company-row report-dash-tree-card--level2${expanded ? " is-open" : ""}`}
-                          onClick={() => toggleCompanyRow(c.companyName)}
-                          aria-expanded={expanded}
-                        >
-                          <div className="report-dash-company-title">
-                            <span className="report-dash-chevron" aria-hidden>
-                              {expanded ? "▲" : "▼"}
-                            </span>
-                            <span className="report-dash-company-name">{c.companyName}</span>
+                        <div className={`report-dash-company-row report-dash-tree-card--level2${expanded ? " is-open" : ""}`}>
+                          <button
+                            type="button"
+                            className="report-dash-company-toggle"
+                            onClick={() => toggleCompanyRow(c.companyName)}
+                            aria-expanded={expanded}
+                          >
+                            <div className="report-dash-company-title">
+                              <span className="report-dash-chevron" aria-hidden>
+                                {expanded ? "▲" : "▼"}
+                              </span>
+                              <span className="report-dash-company-name">{c.companyName}</span>
+                            </div>
+                          </button>
+                          <div className="report-dash-company-metrics">
+                            <MetricTiles
+                              snap={c.summary}
+                              dense
+                              level={2}
+                              onMetricClick={(m, snap) => openCitation(m, { level: 2, companyName: c.companyName }, snap)}
+                            />
                           </div>
-                          <MetricTiles snap={c.summary} dense level={2} />
-                        </button>
+                        </div>
                       </div>
                       {expanded && (
                         <div className="report-dash-company-nested">
                           <div className="report-dash-tree-branch report-dash-tree-branch--depth2">
-                            <WorkshopRows workshops={c.workshops} />
+                            <WorkshopRows
+                              workshops={c.workshops}
+                              onMetricClick={(workshopName, metric, snap) =>
+                                openCitation(metric, {
+                                  level: 3,
+                                  companyName: c.companyName,
+                                  workshopName,
+                                }, snap)
+                              }
+                            />
                           </div>
                         </div>
                       )}
@@ -227,6 +484,20 @@ export function ReportDashboardTab({ history }: { history: ExtractionHistoryItem
           </div>
         )}
       </div>
+
+      <ReportCitationDrawer
+        open={citationOpen}
+        collapsed={citationCollapsed}
+        payload={citationPayload}
+        onClose={() => {
+          setCitationOpen(false);
+          setCitationCollapsed(false);
+          setCitationPayload(null);
+        }}
+        onCollapse={() => setCitationCollapsed(true)}
+        onExpand={() => setCitationCollapsed(false)}
+        onJump={handleJumpToHistory}
+      />
     </div>
   );
 }

@@ -114,9 +114,30 @@
   background: #fff;
 }
 
+.role-select--perspective {
+  min-width: 200px;
+  max-width: min(480px, 100%);
+  font-weight: 600;
+}
+
+.role-bar-hint {
+  flex: 1;
+  min-width: 200px;
+  line-height: 1.4;
+}
+
 .main-area {
   flex: 1;
   padding: 20px 24px 32px;
+}
+
+.home-dash {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.home-dash-subtabs {
+  margin-bottom: 16px;
 }
 
 .dashboard {
@@ -225,13 +246,18 @@
 }
 
 .report-dash-tree-branch--depth2 {
-  margin: 8px 0 4px 6px;
-  padding: 4px 0 4px 2px;
+  margin: 8px 0 4px 11px;
+  padding: 4px 0 4px 0;
   border-left: none;
+  /* 公司块 padding 盒左缘(≈一级 + depth1 + 公司左边框) + 本 margin = 一级卡片左 + 2×缩进步，三级整体行与二级对齐右缘、左缘多缩进一级 */
 }
 
-.report-dash-company-row.report-dash-tree-card--level2 {
-  padding: 10px var(--report-dash-metric-pad-x);
+.report-dash-company-row.report-dash-tree-card--level2 .report-dash-company-toggle {
+  padding: 10px var(--report-dash-metric-pad-x) 6px;
+}
+
+.report-dash-company-row.report-dash-tree-card--level2 .report-dash-company-metrics {
+  padding-bottom: 10px;
 }
 
 .report-dash-tree-node--level2.report-dash-company-block {
@@ -378,11 +404,10 @@
   line-height: 1.4;
 }
 
-.report-dash-summary-trigger {
+.report-dash-summary-card {
   display: block;
   width: 100%;
   text-align: left;
-  cursor: pointer;
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px var(--report-dash-metric-pad-x);
@@ -391,17 +416,38 @@
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.report-dash-tree-node--level1 .report-dash-summary-trigger {
+.report-dash-tree-node--level1 .report-dash-summary-card {
   margin-bottom: 0;
 }
 
-.report-dash-summary-trigger:hover {
+.report-dash-summary-card:hover {
   border-color: #94a3b8;
 }
 
-.report-dash-summary-trigger.is-open {
+.report-dash-summary-card.is-open {
   border-color: var(--primary);
   box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.22);
+}
+
+.report-dash-summary-toggle {
+  display: block;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.report-dash-summary-toggle .report-dash-summary-head {
+  margin-bottom: 0;
+}
+
+.report-dash-summary-metrics {
+  margin-top: 2px;
 }
 
 .report-dash-summary-head {
@@ -569,11 +615,27 @@
   min-width: 0;
   width: 100%;
   text-align: left;
-  cursor: pointer;
   border: none;
   background: #f8fafc;
-  padding: 12px var(--report-dash-metric-pad-x);
+  padding: 0;
   transition: background 0.15s;
+}
+
+.report-dash-company-toggle {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 10px var(--report-dash-metric-pad-x) 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.report-dash-company-metrics {
+  padding: 0 var(--report-dash-metric-pad-x) 10px;
 }
 
 .report-dash-company-row:hover {
@@ -582,6 +644,19 @@
 
 .report-dash-company-row.is-open {
   background: #eef6ff;
+}
+
+.report-dash-metric--tile-btn {
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  width: 100%;
+  cursor: pointer;
+  transition: box-shadow 0.15s, background 0.12s;
+}
+
+.report-dash-metric-grid--clickable .report-dash-metric--tile-btn:hover {
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.35);
 }
 
 .report-dash-company-title {
@@ -1089,6 +1164,116 @@
   margin-top: 8px;
 }
 
+/* 顶部设置：大模型 Key + 部门架构 */
+.app-config-modal.modal {
+  width: min(640px, 100%);
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+}
+
+.app-config-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.app-config-modal-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.app-config-modal-close {
+  border: none;
+  background: transparent;
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.app-config-modal-close:hover {
+  background: #f1f5f9;
+  color: var(--text);
+}
+
+.app-config-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: #f8fafc;
+  flex-shrink: 0;
+}
+
+.app-config-tab {
+  border: none;
+  background: transparent;
+  padding: 10px 16px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.app-config-tab.is-active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  background: #fff;
+  border-radius: 8px 8px 0 0;
+}
+
+.app-config-body {
+  padding: 16px 18px 18px;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.app-config-intro {
+  margin-top: 0;
+}
+
+.org-structure-label {
+  display: block;
+  margin: 12px 0 0;
+}
+
+.org-structure-textarea {
+  width: 100%;
+  min-height: 280px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.nav-config-icon.nav-btn {
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nav-config-gear {
+  display: block;
+}
+
 .llm-modal h3 {
   margin-top: 0;
 }
@@ -1442,6 +1627,14 @@
   line-height: 1.4;
 }
 
+.history-title-actions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 /* 提取历史：按日期时间线 → 分公司 → 记录 */
 .history-timeline {
   position: relative;
@@ -1708,4 +1901,516 @@
 
 .history-panel .report-leaf {
   border-bottom-color: #ecfccb;
+}
+
+.history-head-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.history-view-file-btn {
+  flex-shrink: 0;
+}
+
+.history-citations-wrap {
+  max-height: 480px;
+  overflow: auto;
+}
+
+.history-citations-empty {
+  margin: 0;
+  padding: 8px 4px;
+}
+
+.history-citations-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: #14532d;
+}
+
+.history-citations-table th,
+.history-citations-table td {
+  border: 1px solid #86efac;
+  padding: 8px 10px;
+  vertical-align: top;
+  text-align: left;
+}
+
+.history-citations-table th {
+  background: linear-gradient(180deg, #ecfdf5, #f0fdf4);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.history-citations-path {
+  max-width: 240px;
+  word-break: break-word;
+}
+
+.history-citations-label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.history-citations-subpath {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.history-citations-value {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 140px;
+}
+
+.history-citations-value-auto {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 0.72rem;
+  color: #854d0e;
+  background: #fef9c3;
+  border: 1px solid #fde047;
+  padding: 2px 8px;
+  border-radius: 6px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.history-citations-value-paren {
+  display: inline;
+  vertical-align: middle;
+}
+
+.history-citations-excerpt-pre mark.history-citations-value-mark {
+  margin: 0;
+  padding: 0 1px;
+  background: #fef08a;
+  color: inherit;
+  font: inherit;
+  border-radius: 2px;
+}
+
+.history-citations-excerpt-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: #0f172a;
+}
+
+/* 提取历史：report_data 归档侧栏 */
+.report-archive-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  pointer-events: none;
+}
+
+.report-archive-drawer-root .report-archive-drawer-backdrop,
+.report-archive-drawer-root .report-archive-drawer {
+  pointer-events: auto;
+}
+
+.report-archive-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: rgba(15, 23, 42, 0.38);
+  cursor: pointer;
+}
+
+.report-archive-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 92vw);
+  max-width: 100%;
+  background: #fff;
+  box-shadow: -8px 0 28px rgba(15, 23, 42, 0.18);
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  transition: width 0.22s ease, transform 0.22s ease;
+}
+
+.report-archive-drawer--collapsed {
+  width: 48px;
+  overflow: hidden;
+}
+
+.report-archive-drawer--collapsed .report-archive-drawer-title {
+  display: none;
+}
+
+.report-archive-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #f8fafc 0%, #fff 100%);
+  flex-shrink: 0;
+}
+
+.report-archive-drawer--collapsed .report-archive-drawer-head {
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 6px;
+}
+
+.report-archive-drawer-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+}
+
+.report-archive-drawer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.report-archive-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px 20px;
+}
+
+.report-archive-drawer-hint {
+  margin: 0 0 10px;
+}
+
+.report-archive-drawer-source {
+  margin: 0 0 12px;
+}
+
+.report-archive-tree {
+  font-size: 0.82rem;
+}
+
+.report-archive-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 34%) 1fr;
+  gap: 8px 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid #e2e8f0;
+  align-items: start;
+}
+
+.report-archive-key {
+  font-weight: 600;
+  color: #334155;
+  word-break: break-word;
+}
+
+.report-archive-key--blue,
+.report-archive-summary--blue {
+  color: #1d4ed8;
+}
+
+.report-archive-val {
+  color: #0f172a;
+  word-break: break-word;
+}
+
+.report-archive-val--blue {
+  color: #1d4ed8;
+}
+
+.report-archive-summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #334155;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+}
+
+.report-archive-summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-archive-summary::marker {
+  content: "";
+}
+
+.report-archive-meta {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.report-archive-block {
+  margin: 0 0 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fafbfc;
+}
+
+.report-archive-block-body {
+  margin-top: 6px;
+  padding-left: 4px;
+  border-left: 2px solid #e2e8f0;
+}
+
+.report-archive-pre {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow: auto;
+  color: #0f172a;
+}
+
+.report-archive-pre--blue {
+  color: #1d4ed8;
+}
+
+/* 报告看板：原文引用侧栏（自右滑入；遮罩不虚化主界面） */
+.report-citation-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 4800;
+  pointer-events: none;
+}
+
+.report-citation-drawer-root .report-citation-drawer-backdrop,
+.report-citation-drawer-root .report-citation-drawer {
+  pointer-events: auto;
+}
+
+.report-citation-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: rgba(15, 23, 42, 0.06);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.38s ease;
+}
+
+.report-citation-drawer-root--in .report-citation-drawer-backdrop {
+  opacity: 1;
+}
+
+.report-citation-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(400px, 90vw);
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  z-index: 1;
+  transform: translateX(104%);
+  will-change: transform;
+  transition:
+    transform 0.38s cubic-bezier(0.22, 1, 0.32, 1),
+    width 0.26s ease,
+    box-shadow 0.35s ease;
+  background: rgba(255, 255, 255, 0.42);
+  backdrop-filter: blur(18px) saturate(1.35);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  border-left: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    -12px 0 48px rgba(15, 23, 42, 0.12),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.report-citation-drawer--in {
+  transform: translateX(0);
+}
+
+.report-citation-drawer--collapsed {
+  width: 44px;
+  overflow: hidden;
+}
+
+.report-citation-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.38);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.report-citation-drawer--collapsed .report-citation-drawer-head {
+  flex-direction: column;
+  padding: 8px 4px;
+}
+
+.report-citation-drawer--collapsed .report-citation-drawer-title {
+  display: none;
+}
+
+.report-citation-drawer-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #0f172a;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.report-citation-drawer-close-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.25);
+  color: #475569;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.report-citation-drawer-close-icon:hover {
+  background: rgba(255, 255, 255, 0.55);
+  color: #0f172a;
+}
+
+.report-citation-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px 20px;
+}
+
+.report-citation-meta {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.report-citation-meta > div {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.report-citation-meta-value {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #0f172a;
+  margin-top: 2px;
+}
+
+.report-citation-quote {
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  border-left: 4px solid rgba(37, 99, 235, 0.65);
+  border-radius: 0 12px 12px 0;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: #1e293b;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(248, 250, 252, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+@keyframes report-citation-quote-num-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px #dc2626, 0 0 0 3px rgba(220, 38, 38, 0.35);
+    border-color: #dc2626;
+  }
+  50% {
+    box-shadow: 0 0 0 2px #ef4444, 0 0 0 6px rgba(239, 68, 68, 0.2);
+    border-color: #ef4444;
+  }
+}
+
+.report-citation-quote-num {
+  display: inline;
+  color: #dc2626;
+  font-weight: 700;
+  padding: 1px 3px;
+  margin: 0 1px;
+  border: 2px solid #dc2626;
+  border-radius: 4px;
+  background: rgba(254, 226, 226, 0.65);
+  animation: report-citation-quote-num-pulse 1.05s ease-in-out infinite;
+}
+
+.report-citation-actions {
+  margin-top: auto;
+}
+
+.report-citation-actions .primary-btn {
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
+}
+
+.report-citation-drawer-expand-tab {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  width: 100%;
+  flex: 1;
+  min-height: 120px;
+  margin: 0;
+  padding: 12px 0;
+  border: none;
+  background: rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #334155;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.12em;
+  border-top: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.report-citation-drawer-expand-tab:hover {
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.history-raw-highlight {
+  background: #fef08a;
+  color: #0f172a;
+  padding: 0 2px;
+  border-radius: 2px;
 }

@@ -1,4 +1,17 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+/**
+ * @fileoverview 报告管理页：上传/粘贴正文、调用 LLM 提取结构化 JSON、预览、写入提取历史；处理从看板跳转的焦点与高亮。
+ *
+ * **设计要点**
+ * - `consumeExtractionFocusFromStorage`：挂载时 `useLayoutEffect` 读一次；另监听 `OPEN_REPORTS_PAGE_EVENT`，在报告页已挂载时也能消费看板「跳转原文」写入的 `sessionStorage`。
+ * - 提取日期优先从正文 `extractDateFromPlainText`，否则 `formatExtractionDate()`，与 `normalizeProductionReportJson` 对齐。
+ * - 监听 `LLM_CONFIG_CHANGED_EVENT` 仅用于 bump 内部 epoch，触发依赖 `readLlmEnv()` 的 UI 重算。
+ *
+ * @module ReportManagement
+ */
+
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { useTasks } from "../context/TaskContext";
 import { REPORT_EXTRACTION_USER_INSTRUCTION } from "../constants/reportExtractionPrompt";
 import type { ExtractionHistoryItem, LlmCallStats } from "../types/extractionHistory";
 import {
@@ -8,10 +21,14 @@ import {
   removeExtractionHistoryItem,
   replaceExtractionHistory,
 } from "../utils/extractionHistoryStorage";
+import { buildTimelineGroups } from "../utils/extractionHistoryGroup";
 import { extractDateFromPlainText } from "../utils/extractDateFromText";
 import { buildExtractionHistoryTitle } from "../utils/extractionHistoryTitle";
 import { formatLlmStatsParts } from "../utils/formatLlmStats";
 import { extractTextFromFile } from "../utils/extractFileText";
+import { buildQuantitativeMetricCitations } from "../utils/quantitativeMetricCitations";
+import { EXTRACTION_FOCUS_STORAGE_KEY, OPEN_REPORTS_PAGE_EVENT } from "../utils/reportCitation";
+import { extractionHistoryVisibleForPerspective } from "../utils/leaderPerspective";
 import {
   callProductionReportExtraction,
   formatExtractionDate,
@@ -21,13 +38,13 @@ import {
   readLlmEnv,
 } from "../utils/llmExtract";
 import { ExtractionHistoryList } from "./ExtractionHistoryList";
-import { ReportDashboardTab } from "./ReportDashboardTab";
 import { ReportJsonPreview } from "./ReportJsonPreview";
 
 type Phase = "idle" | "reading" | "calling" | "done" | "error";
-type ReportMainTab = "dashboard" | "history";
 
+/** 懒加载于 `App` 的「报告」路由；内含提取表单与历史列表。 */
 export function ReportManagement() {
+  const { user } = useTasks();
   const inputId = useId();
   const importHistoryInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -42,8 +59,49 @@ export function ReportManagement() {
   const [llmCallStats, setLlmCallStats] = useState<LlmCallStats | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [history, setHistory] = useState<ExtractionHistoryItem[]>(() => loadExtractionHistory());
-  const [reportMainTab, setReportMainTab] = useState<ReportMainTab>("history");
+  const historyRef = useRef(history);
+  const [citationsRefreshing, setCitationsRefreshing] = useState(false);
+  const citationsRefreshGuardRef = useRef(false);
+  const [extractionFocus, setExtractionFocus] = useState<{ id: string; needle: string } | null>(null);
   const [, setConfigEpoch] = useState(0);
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  const visibleHistory = useMemo(
+    () => history.filter((h) => extractionHistoryVisibleForPerspective(h, user.perspective)),
+    [history, user.perspective],
+  );
+
+  const consumeExtractionFocusFromStorage = useCallback(() => {
+    try {
+      const raw = sessionStorage.getItem(EXTRACTION_FOCUS_STORAGE_KEY);
+      if (!raw) return;
+      const p = JSON.parse(raw) as { id: string; needle: string };
+      if (p?.id && typeof p.needle === "string") {
+        sessionStorage.removeItem(EXTRACTION_FOCUS_STORAGE_KEY);
+        setExtractionFocus(p);
+      }
+    } catch {
+      try {
+        sessionStorage.removeItem(EXTRACTION_FOCUS_STORAGE_KEY);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    consumeExtractionFocusFromStorage();
+  }, [consumeExtractionFocusFromStorage]);
+
+  useEffect(() => {
+    const onOpenReports = () => consumeExtractionFocusFromStorage();
+    window.addEventListener(OPEN_REPORTS_PAGE_EVENT, onOpenReports);
+    return () => window.removeEventListener(OPEN_REPORTS_PAGE_EVENT, onOpenReports);
+  }, [consumeExtractionFocusFromStorage]);
+
   useEffect(() => {
     const bump = () => setConfigEpoch((n) => n + 1);
     window.addEventListener(LLM_CONFIG_CHANGED_EVENT, bump);
@@ -103,7 +161,7 @@ export function ReportManagement() {
     const env = readLlmEnv();
     if (!env) {
       setError(
-        '请先在顶部点击「模型 Key」，填写并保存 DeepSeek API Key；或在 .env 中配置 VITE_LLM_API_KEY / 开发代理（详见 .env.example）。开发环境下 DeepSeek 请求走同源代理 /api/deepseek。',
+        '请先在顶部点击设置图标打开「大模型 Key」，填写并保存 DeepSeek API Key；或在 .env 中配置 VITE_LLM_API_KEY / 开发代理（详见 .env.example）。开发环境下 DeepSeek 请求走同源代理 /api/deepseek。',
       );
       return;
     }
@@ -159,6 +217,10 @@ export function ReportManagement() {
     const displayTitle =
       buildExtractionHistoryTitle(parsedClone, rawModel) ??
       `${formatExtractionDate()}-暂无`;
+    const quantitativeMetricCitations =
+      parsedClone != null && typeof parsedClone === "object"
+        ? buildQuantitativeMetricCitations(extracted.text, parsedClone)
+        : undefined;
     const item: ExtractionHistoryItem = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       savedAt: new Date().toISOString(),
@@ -168,6 +230,7 @@ export function ReportManagement() {
       rawModelResponse: rawModel,
       parsedJson: parsedClone,
       llmStats: llmCallStats ?? undefined,
+      quantitativeMetricCitations,
     };
     setHistory(appendExtractionHistory(item));
     setExtracted(null);
@@ -183,6 +246,44 @@ export function ReportManagement() {
 
   const removeHistory = useCallback((id: string) => {
     setHistory(removeExtractionHistoryItem(id));
+  }, []);
+
+  /** 按时间线顺序逐条重算 `quantitativeMetricCitations` 并写回 localStorage，便于旧数据补全「引用提取」Tab。 */
+  const refreshAllQuantitativeCitations = useCallback(async () => {
+    if (citationsRefreshGuardRef.current) return;
+    citationsRefreshGuardRef.current = true;
+    setCitationsRefreshing(true);
+    try {
+      const list = historyRef.current;
+      if (list.length === 0) return;
+      const ordered = buildTimelineGroups(list).flatMap((g) => g.items);
+      let working = list.map((item) => ({ ...item }));
+      for (const o of ordered) {
+        const idx = working.findIndex((x) => x.id === o.id);
+        if (idx < 0) continue;
+        const item = working[idx];
+        if (item.parsedJson == null || typeof item.parsedJson !== "object") continue;
+        working = [
+          ...working.slice(0, idx),
+          {
+            ...item,
+            quantitativeMetricCitations: buildQuantitativeMetricCitations(
+              item.originalText,
+              item.parsedJson,
+            ),
+          },
+          ...working.slice(idx + 1),
+        ];
+        flushSync(() => {
+          setHistory(working);
+          replaceExtractionHistory(working);
+        });
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    } finally {
+      citationsRefreshGuardRef.current = false;
+      setCitationsRefreshing(false);
+    }
   }, []);
 
   const exportHistory = useCallback(() => {
@@ -259,31 +360,6 @@ export function ReportManagement() {
           </div>
         </div>
 
-        <div className="report-main-tabs" role="tablist" aria-label="报告管理子页">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={reportMainTab === "dashboard"}
-            className={`report-main-tab${reportMainTab === "dashboard" ? " is-active" : ""}`}
-            onClick={() => setReportMainTab("dashboard")}
-          >
-            看板
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={reportMainTab === "history"}
-            className={`report-main-tab${reportMainTab === "history" ? " is-active" : ""}`}
-            onClick={() => setReportMainTab("history")}
-          >
-            历史
-          </button>
-        </div>
-
-        {reportMainTab === "dashboard" && <ReportDashboardTab history={history} />}
-
-        {reportMainTab === "history" && (
-          <>
         <label className="report-manual-label">
           <span className="report-manual-title">日报正文（与附件二选一）</span>
           <textarea
@@ -348,7 +424,7 @@ export function ReportManagement() {
 
         {!readLlmEnv() && (
           <p className="report-hint warn">
-            当前未配置大模型：请点击顶部「<strong>模型 Key</strong>」保存 DeepSeek API Key（推荐）；亦可使用{" "}
+            当前未配置大模型：请点击顶部「<strong>设置</strong>」图标，在「大模型 Key」中保存 DeepSeek API Key（推荐）；亦可使用{" "}
             <code>.env</code> 中的 <code>VITE_LLM_API_KEY</code> 等兼容方式。
           </p>
         )}
@@ -411,13 +487,16 @@ export function ReportManagement() {
             <pre className="json-fallback">{rawModel}</pre>
           )}
         </div>
-          </>
-        )}
       </section>
 
-      {reportMainTab === "history" && (
-        <ExtractionHistoryList items={history} onRemove={removeHistory} />
-      )}
+      <ExtractionHistoryList
+        items={visibleHistory}
+        onRemove={removeHistory}
+        extractionFocus={extractionFocus}
+        onExtractionFocusConsumed={() => setExtractionFocus(null)}
+        citationsRefreshing={citationsRefreshing}
+        onRefreshQuantitativeCitations={refreshAllQuantitativeCitations}
+      />
     </div>
   );
 }

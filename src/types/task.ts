@@ -4,8 +4,6 @@ export type TaskCategory = "安全生产" | "技改项目" | "质量与环保";
 
 export type RiskLevel = "high" | "medium" | "low";
 
-export type UserRole = "chairman" | "functional" | "branch" | "workshop";
-
 export interface Task {
   id: string;
   code: string;
@@ -19,14 +17,13 @@ export interface Task {
   workshop: string | null;
   createdAt: string;
   followedByUser?: boolean;
+  /** 接收 / 配合部门（可多值），用于部门领导「接收方」可见权限 */
+  receiverDepartments?: string[];
+  /** 单接收部门，兼容旧数据 */
+  receiverDepartment?: string;
 }
 
+/** 当前视角：固定「集团领导」或配置架构行「{名称}领导」 */
 export interface CurrentUser {
-  role: UserRole;
-  /** 职能部门人员所属部门名，用于过滤 */
-  department?: string;
-  /** 分公司负责人所属分公司 */
-  branch?: string;
-  /** 车间负责人所属车间 */
-  workshop?: string;
+  perspective: string;
 }
