@@ -4,6 +4,7 @@
  * **设计要点**
  * - `readLlmEnv`：用户若在界面保存 DeepSeek Key，则走 dev 代理 `/api/deepseek` 或直连官方 URL；否则读 `VITE_*` 兼容旧部署。
  * - `callProductionReportExtraction`：正文截断 `MAX_CHARS`；`response_format: json_object`；系统提示约束顶层字段形状，用户消息拼接固定提取说明与「提取日期」块。
+ * - `postChatCompletion`：可选 `max_tokens`（如数据中台清洗）；响应中带 `finish_reason`，`length` 表示输出被截断。
  * - `normalizeProductionReportJson`：落库前补全/覆盖顶层「分公司名称」「提取日期」，避免模型漏字段导致看板/时间线断裂。
  * - Key 变更通过 `LLM_CONFIG_CHANGED_EVENT` 广播，配置弹窗与提取页可同步刷新。
  *
@@ -98,29 +99,43 @@ export interface ProductionReportExtractionResult {
   outputTokens: number | null;
   totalTokens: number | null;
   durationMs: number;
+  /** 与 OpenAI 兼容 API 的 `choices[0].finish_reason`；`length` 表示因输出长度上限截断 */
+  finishReason: string | null;
 }
 
 type ChatRoleMessage = { role: "system" | "user" | "assistant"; content: string };
 
-async function postChatCompletionJson(
+/** 模型输出形态：`json_object` 强制单 JSON；`text` 为自由文本/Markdown。 */
+type ChatResponseMode = "json_object" | "text";
+
+async function postChatCompletion(
   env: LlmEnv,
   messages: ChatRoleMessage[],
   temperature = 0.2,
+  responseMode: ChatResponseMode = "json_object",
+  maxCompletionTokens?: number,
 ): Promise<ProductionReportExtractionResult> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (env.apiKey) headers.Authorization = `Bearer ${env.apiKey}`;
 
   const t0 = performance.now();
 
+  const payload: Record<string, unknown> = {
+    model: env.model,
+    temperature,
+    messages,
+  };
+  if (typeof maxCompletionTokens === "number" && maxCompletionTokens > 0) {
+    payload.max_tokens = maxCompletionTokens;
+  }
+  if (responseMode === "json_object") {
+    payload.response_format = { type: "json_object" };
+  }
+
   const res = await fetch(env.apiUrl, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model: env.model,
-      temperature,
-      response_format: { type: "json_object" },
-      messages,
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
@@ -130,7 +145,7 @@ async function postChatCompletionJson(
 
   const data = (await res.json()) as {
     model?: string;
-    choices?: { message?: { content?: string } }[];
+    choices?: { message?: { content?: string }; finish_reason?: string | null }[];
     usage?: {
       prompt_tokens?: number;
       completion_tokens?: number;
@@ -156,6 +171,9 @@ async function postChatCompletionJson(
   const model =
     typeof data.model === "string" && data.model.trim() ? data.model.trim() : env.model;
 
+  const fr = data.choices?.[0]?.finish_reason;
+  const finishReason: string | null = typeof fr === "string" ? fr : null;
+
   return {
     content: content.trim(),
     model,
@@ -163,6 +181,7 @@ async function postChatCompletionJson(
     outputTokens: completionTokens,
     totalTokens,
     durationMs,
+    finishReason,
   };
 }
 
@@ -174,10 +193,39 @@ export async function callLlmChatJsonObject(
   systemContent: string,
   userContent: string,
 ): Promise<ProductionReportExtractionResult> {
-  return postChatCompletionJson(env, [
-    { role: "system", content: systemContent },
-    { role: "user", content: userContent },
-  ]);
+  return postChatCompletion(
+    env,
+    [
+      { role: "system", content: systemContent },
+      { role: "user", content: userContent },
+    ],
+    0.2,
+    "json_object",
+  );
+}
+
+/**
+ * 通用自由文本补全（无 `response_format` 约束），适用于 Markdown、自定义格式说明类输出。
+ * @param temperature 略提高可减少过度拘谨（默认 0.35）
+ * @param maxCompletionTokens 传入时设置 `max_tokens`，避免长输出被接口默认上限截断（数据中台清洗等场景）
+ */
+export async function callLlmChatText(
+  env: LlmEnv,
+  systemContent: string,
+  userContent: string,
+  temperature = 0.35,
+  maxCompletionTokens?: number,
+): Promise<ProductionReportExtractionResult> {
+  return postChatCompletion(
+    env,
+    [
+      { role: "system", content: systemContent },
+      { role: "user", content: userContent },
+    ],
+    temperature,
+    "text",
+    maxCompletionTokens,
+  );
 }
 
 /**
@@ -197,17 +245,22 @@ export async function callProductionReportExtraction(
 
   const dateBlock = `【系统给定】提取日期（YYYY-MM-DD，请原样写入 JSON 顶层「提取日期」；该值已由系统根据「正文可解析日期优先，否则为本次请求当日」确定）：${extractionDate}`;
 
-  return postChatCompletionJson(env, [
-    {
-      role: "system",
-      content:
-        "你是造纸企业 COO 助手。严格只输出一个 JSON 对象：顶层须含「分公司名称」「提取日期」「production_report」；production_report 下每个一级主题对象内须含与下级并列的字符串键「范围」（分公司或车间名）；其余叶子值为字符串；无信息用「暂无」。不要输出 markdown。",
-    },
-    {
-      role: "user",
-      content: `${REPORT_EXTRACTION_USER_INSTRUCTION}\n\n${dateBlock}\n\n---以下为待分析的日报/报告正文（纯文本）---\n\n${body}`,
-    },
-  ]);
+  return postChatCompletion(
+    env,
+    [
+      {
+        role: "system",
+        content:
+          "你是造纸企业 COO 助手。严格只输出一个 JSON 对象：顶层须含「分公司名称」「提取日期」「production_report」；production_report 下每个一级主题对象内须含与下级并列的字符串键「范围」（分公司或车间名）；其余叶子值为字符串；无信息用「暂无」。不要输出 markdown。",
+      },
+      {
+        role: "user",
+        content: `${REPORT_EXTRACTION_USER_INSTRUCTION}\n\n${dateBlock}\n\n---以下为待分析的日报/报告正文（纯文本）---\n\n${body}`,
+      },
+    ],
+    0.2,
+    "json_object",
+  );
 }
 
 /** 薄封装 `JSON.parse`；调用方负责 try/catch 或确信输入合法。 */

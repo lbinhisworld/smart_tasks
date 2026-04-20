@@ -13,6 +13,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { flushSync } from "react-dom";
 import { useTasks } from "../context/TaskContext";
 import { REPORT_EXTRACTION_USER_INSTRUCTION } from "../constants/reportExtractionPrompt";
+import type { DataPlatform, ExternalApiProfile } from "../types/externalApiProfile";
 import type { ExtractionHistoryItem, LlmCallStats } from "../types/extractionHistory";
 import {
   appendExtractionHistory,
@@ -31,6 +32,9 @@ import { buildPendingTasksFromSavedReport } from "../utils/buildPendingTasksFrom
 import { buildQuantitativeMetricCitations } from "../utils/quantitativeMetricCitations";
 import { EXTRACTION_FOCUS_STORAGE_KEY, OPEN_REPORTS_PAGE_EVENT } from "../utils/reportCitation";
 import { extractionHistoryVisibleForPerspective } from "../utils/leaderPerspective";
+import { loadCleanedJsonFromSession } from "../utils/dataHubCleanedJsonStorage";
+import { loadDataHubState } from "../utils/externalApiStorage";
+import { loadDataSyncLastBody } from "../utils/dataSyncResponseStorage";
 import {
   callProductionReportExtraction,
   formatExtractionDate,
@@ -69,6 +73,13 @@ export function ReportManagement() {
   const citationsRefreshGuardRef = useRef(false);
   const [extractionFocus, setExtractionFocus] = useState<{ id: string; needle: string } | null>(null);
   const [, setConfigEpoch] = useState(0);
+
+  const [dataHubModalOpen, setDataHubModalOpen] = useState(false);
+  const [hubPlatforms, setHubPlatforms] = useState<DataPlatform[]>([]);
+  const [hubProfiles, setHubProfiles] = useState<ExternalApiProfile[]>([]);
+  const [hubPlatformId, setHubPlatformId] = useState("");
+  const [hubProfileId, setHubProfileId] = useState("");
+  const [dataHubImportInfo, setDataHubImportInfo] = useState<string | null>(null);
 
   useEffect(() => {
     historyRef.current = history;
@@ -113,6 +124,59 @@ export function ReportManagement() {
     window.addEventListener(LLM_CONFIG_CHANGED_EVENT, bump);
     return () => window.removeEventListener(LLM_CONFIG_CHANGED_EVENT, bump);
   }, []);
+
+  useEffect(() => {
+    if (!dataHubModalOpen) return;
+    const { platforms, profiles } = loadDataHubState();
+    setHubPlatforms(platforms);
+    setHubProfiles(profiles);
+    const p0 = platforms[0]?.id ?? "";
+    setHubPlatformId(p0);
+    const under = profiles.filter((x) => x.platformId === p0);
+    setHubProfileId(under[0]?.id ?? profiles[0]?.id ?? "");
+  }, [dataHubModalOpen]);
+
+  const hubProfilesUnderPlatform = useMemo(
+    () => hubProfiles.filter((p) => p.platformId === hubPlatformId),
+    [hubProfiles, hubPlatformId],
+  );
+
+  /**
+   * 将数据中台选中接口的清洗后 JSON（无则回退为缓存的原始 JSON）写入日报正文，并清空附件与解析状态。
+   */
+  const applyDataHubJsonToManual = useCallback(() => {
+    if (!hubProfileId) {
+      window.alert("请先选择数据源与接口。");
+      return;
+    }
+    let text = loadCleanedJsonFromSession(hubProfileId)?.trim() ?? "";
+    let usedRawFallback = false;
+    if (!text) {
+      text = loadDataSyncLastBody(hubProfileId)?.trim() ?? "";
+      usedRawFallback = true;
+    }
+    if (!text) {
+      window.alert(
+        "该接口暂无可用数据。请先在「数据中台」对该接口发送测试以缓存原始 JSON；若需清洗后的 JSON，请在数据中台「清洗后的JSON数据」页签保存规则并生成结果。",
+      );
+      return;
+    }
+    setFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setManualText(text);
+    setExtracted(null);
+    setRawModel(null);
+    setParsed(null);
+    setLlmCallStats(null);
+    setError(null);
+    setPhase("idle");
+    setDataHubImportInfo(
+      usedRawFallback
+        ? "已填入该接口缓存的原始 JSON（当前会话尚无清洗后的 JSON 时自动使用）。"
+        : "已填入该接口在数据中台生成的清洗后 JSON。",
+    );
+    setDataHubModalOpen(false);
+  }, [hubProfileId]);
 
   const onFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -442,6 +506,14 @@ export function ReportManagement() {
             accept=".pdf,.doc,.docx,.md,.markdown,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             onChange={onFile}
           />
+          <button
+            type="button"
+            className="ghost-btn report-data-hub-btn"
+            disabled={phase === "reading" || phase === "calling"}
+            onClick={() => setDataHubModalOpen(true)}
+          >
+            获取数据中台数据
+          </button>
           <div className="parse-btn-wrap">
             <button
               type="button"
@@ -461,6 +533,8 @@ export function ReportManagement() {
             )}
           </div>
         </div>
+
+        {dataHubImportInfo && <p className="muted tiny report-data-hub-import-hint">{dataHubImportInfo}</p>}
 
         {!readLlmEnv() && (
           <p className="report-hint warn">
@@ -541,6 +615,76 @@ export function ReportManagement() {
             onRefreshQuantitativeCitations={refreshAllQuantitativeCitations}
             extraTitleActions={historyImportExport}
           />
+        </div>
+      )}
+
+      {dataHubModalOpen && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setDataHubModalOpen(false)}>
+          <div
+            className="modal report-data-hub-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="report-data-hub-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="report-data-hub-modal-title">从数据中台填入 JSON</h3>
+            <p className="muted small">
+              选择平台与接口后，将优先使用「清洗后的 JSON」；若本会话尚未生成，则使用「测试」缓存的原始响应 JSON。
+            </p>
+            {hubPlatforms.length === 0 || hubProfiles.length === 0 ? (
+              <p className="report-hint warn">
+                暂无数据中台配置。请先在顶部进入「数据中台」，添加平台与接口并保存。
+              </p>
+            ) : (
+              <div className="modal-form report-data-hub-modal-form">
+                <label className="form-row">
+                  <span>数据源（平台）</span>
+                  <select
+                    value={hubPlatformId}
+                    onChange={(e) => {
+                      const pid = e.target.value;
+                      setHubPlatformId(pid);
+                      const first = hubProfiles.filter((p) => p.platformId === pid)[0]?.id ?? "";
+                      setHubProfileId(first);
+                    }}
+                  >
+                    {hubPlatforms.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name || p.id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="form-row">
+                  <span>接口</span>
+                  <select
+                    value={hubProfileId}
+                    onChange={(e) => setHubProfileId(e.target.value)}
+                    disabled={hubProfilesUnderPlatform.length === 0}
+                  >
+                    {hubProfilesUnderPlatform.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name || p.id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+            <div className="form-actions report-data-hub-modal-actions">
+              <button type="button" className="ghost-btn" onClick={() => setDataHubModalOpen(false)}>
+                取消
+              </button>
+              <button
+                type="button"
+                className="primary-btn"
+                disabled={hubProfilesUnderPlatform.length === 0 || !hubProfileId}
+                onClick={applyDataHubJsonToManual}
+              >
+                填入日报正文
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
