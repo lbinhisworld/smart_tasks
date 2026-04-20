@@ -4,6 +4,13 @@ export type TaskCategory = "安全生产" | "技改项目" | "质量与环保";
 
 export type RiskLevel = "high" | "medium" | "low";
 
+/** 单条进展：日期 + 描述（如来自日报「进度更新」） */
+export interface TaskProgressEntry {
+  /** YYYY-MM-DD */
+  date: string;
+  description: string;
+}
+
 export interface Task {
   id: string;
   code: string;
@@ -31,6 +38,8 @@ export interface Task {
   receiverDepartment?: string;
   /** 看板「日报计划提取任务」行 id（`PendingDailyPlanTaskRow.id`）；写入后用于跨页展示已生成任务编号 */
   sourcePendingDailyPlanRowId?: string;
+  /** 进度跟踪：按保存顺序排列的时间线（展示时可按日期排序） */
+  progressTracking?: TaskProgressEntry[];
 }
 
 /** 当前视角：固定「集团领导」或配置架构行「{名称}领导」 */

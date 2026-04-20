@@ -1,5 +1,5 @@
 /**
- * @fileoverview 报告管理页：双 Tab「报告提取」（上传/解析/预览；预览区展示提取结果，中台路径下为多张可折叠「日期-分公司」卡）与「提取历史」（时间线、导入导出、导出原始报告）；处理从看板跳转的焦点与高亮并切至历史 Tab。
+ * @fileoverview 报告管理页：双 Tab「报告提取」（上传/解析/预览；「报告内容提取」、按分公司「更新现有任务进度」、从 6.1/6.2 生成「日报计划任务」）与「提取历史」；处理从看板跳转的焦点与高亮并切至历史 Tab。
  *
  * **设计要点**
  * - `consumeExtractionFocusFromStorage`：挂载时 `useLayoutEffect` 读一次；另监听 `OPEN_REPORTS_PAGE_EVENT`，在报告页已挂载时也能消费看板「跳转原文」写入的 `sessionStorage`。
@@ -19,10 +19,14 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
-import { useTasks } from "../context/TaskContext";
+import { STATUSES, useTasks } from "../context/TaskContext";
 import { REPORT_EXTRACTION_USER_INSTRUCTION } from "../constants/reportExtractionPrompt";
 import type { DataPlatform, ExternalApiProfile } from "../types/externalApiProfile";
-import type { ExtractionHistoryItem, LlmCallStats } from "../types/extractionHistory";
+import type {
+  ExtractionHistoryItem,
+  LlmCallStats,
+  PendingDailyPlanTaskRow,
+} from "../types/extractionHistory";
 import {
   appendExtractionHistory,
   loadExtractionHistory,
@@ -64,10 +68,40 @@ import {
 } from "../utils/llmExtract";
 import { ExtractionHistoryList } from "./ExtractionHistoryList";
 import { ReportJsonPreview } from "./ReportJsonPreview";
+import { collectReportCompanyDailySlices } from "../utils/reportCompanyDailySlices";
+import { appendTaskProgressEntry } from "../utils/taskProgressTracking";
+import { taskMatchesReportCompany } from "../utils/taskMatchesReportCompany";
+import { inferTaskProgressFromDaily } from "../utils/llmInferTaskProgressFromDaily";
+import { collectReportCompanyPlanContexts } from "../utils/reportCompanyPlanContexts";
+import { llmSplitDailyPlanItemsFromSections } from "../utils/llmSplitDailyPlanItemsFromSections";
+import { generateTaskInputFromDailyPlanRow } from "../utils/generateTaskFromDailyPlanRow";
+import {
+  clearReportSidePanelsDraft,
+  loadReportSidePanelsDraft,
+  normalizePlanGenPanelAfterLoad,
+  normalizeTaskProgressPanelAfterLoad,
+  saveReportSidePanelsDraft,
+  type StoredPlanGenPanelState as PlanGenPanelState,
+  type StoredPlanGenRowState as PlanGenRowState,
+  type StoredCompanyProgressCardState as CompanyProgressCardState,
+  type StoredTaskProgressPanelState as TaskProgressPanelState,
+  type StoredTaskProgressRowState as TaskProgressRowState,
+} from "../utils/reportSidePanelsDraft";
+import type { Task, TaskStatus } from "../types/task";
 
 type Phase = "idle" | "reading" | "calling" | "done" | "error";
 
 type ReportMgmtTab = "extract" | "history";
+
+/** 与看板「日报计划」一致：文首拼接当前领导视角（领导指示为空时不加）。 */
+function mergePerspectiveLeaderPrefix(perspective: string, existing: string): string {
+  const p = perspective.trim();
+  const e = existing.trim();
+  if (!p) return e;
+  if (!e) return "";
+  if (e.startsWith(p)) return e;
+  return `${p} ${e}`;
+}
 
 function aggregateLlmStats(parts: LlmCallStats[]): LlmCallStats | null {
   if (parts.length === 0) return null;
@@ -85,7 +119,9 @@ function aggregateLlmStats(parts: LlmCallStats[]): LlmCallStats | null {
 
 /** 懒加载于 `App` 的「报告」路由；双 Tab：报告提取 / 提取历史。 */
 export function ReportManagement() {
-  const { user } = useTasks();
+  const { user, visibleTasks, tasks, addTask, updateTask } = useTasks();
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
   const [reportMgmtTab, setReportMgmtTab] = useState<ReportMgmtTab>("extract");
   const inputId = useId();
   const importHistoryInputId = useId();
@@ -124,6 +160,26 @@ export function ReportManagement() {
     current: number;
     total: number;
   } | null>(null);
+  const [taskProgressPanel, setTaskProgressPanel] = useState<TaskProgressPanelState | null>(() =>
+    normalizeTaskProgressPanelAfterLoad(loadReportSidePanelsDraft()?.taskProgressPanel ?? null),
+  );
+  const [taskProgressRunning, setTaskProgressRunning] = useState(false);
+  const [planGenPanel, setPlanGenPanel] = useState<PlanGenPanelState | null>(() =>
+    normalizePlanGenPanelAfterLoad(loadReportSidePanelsDraft()?.planGenPanel ?? null),
+  );
+  const [planGenRunning, setPlanGenRunning] = useState(false);
+
+  useEffect(() => {
+    if (taskProgressPanel === null && planGenPanel === null) {
+      clearReportSidePanelsDraft();
+      return;
+    }
+    saveReportSidePanelsDraft({
+      version: 1,
+      taskProgressPanel,
+      planGenPanel,
+    });
+  }, [taskProgressPanel, planGenPanel]);
 
   useEffect(() => {
     const d = loadReportExtractionPreviewDraft();
@@ -198,6 +254,28 @@ export function ReportManagement() {
     if (!rawModel) return `${formatExtractionDate()}-暂无`;
     return buildExtractionHistoryTitle(parsed, rawModel) ?? `${formatExtractionDate()}-暂无`;
   }, [parsed, rawModel]);
+
+  const reportCompanySlices = useMemo(
+    () => collectReportCompanyDailySlices(hubBranchParses, parsed, extracted?.text ?? null),
+    [hubBranchParses, parsed, extracted?.text],
+  );
+
+  const canRunTaskProgressUpdate =
+    phase === "done" &&
+    reportCompanySlices.length > 0 &&
+    !taskProgressRunning &&
+    readLlmEnv() != null;
+
+  const planGenContexts = useMemo(
+    () => collectReportCompanyPlanContexts(hubBranchParses, parsed, extracted?.text ?? null),
+    [hubBranchParses, parsed, extracted?.text],
+  );
+
+  const canRunPlanGenFromReport =
+    phase === "done" &&
+    planGenContexts.length > 0 &&
+    !planGenRunning &&
+    readLlmEnv() != null;
 
   const consumeExtractionFocusFromStorage = useCallback(() => {
     try {
@@ -379,6 +457,9 @@ export function ReportManagement() {
       );
       return;
     }
+    setTaskProgressPanel(null);
+    setPlanGenPanel(null);
+    clearReportSidePanelsDraft();
 
     try {
       setPhase("reading");
@@ -647,6 +728,372 @@ export function ReportManagement() {
     setFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, [rawModel, extracted, parsed, file?.name, llmCallStats, hubBranchParses]);
+
+  const runTaskProgressUpdate = useCallback(async () => {
+    const env = readLlmEnv();
+    if (!env) {
+      window.alert("请先配置大模型 Key。");
+      return;
+    }
+    const slices = collectReportCompanyDailySlices(hubBranchParses, parsed, extracted?.text ?? null);
+    if (slices.length === 0) {
+      window.alert(
+        "当前没有可用的「分公司日报」数据。请先完成解析，并确保分公司名称与日报内容有效（单日报需在解析结果中含有效的「分公司名称」）。",
+      );
+      return;
+    }
+    const initialCompanies: CompanyProgressCardState[] = slices.map((s) => {
+      const tasks = visibleTasks
+        .filter((t) => t.status !== "已完成" && taskMatchesReportCompany(t, s.companyName))
+        .map(
+          (t): TaskProgressRowState => ({
+            taskId: t.id,
+            code: t.code,
+            description: t.description,
+            currentStatus: t.status,
+            progressEdit: "",
+            statusChoice: "",
+            rowPhase: "pending",
+          }),
+        );
+      return {
+        companyName: s.companyName,
+        dailyPlainText: s.dailyPlainText,
+        reportDate: s.reportDate,
+        tasks,
+        cardPhase: "pending",
+      };
+    });
+    setTaskProgressPanel({ companies: initialCompanies });
+    setTaskProgressRunning(true);
+    try {
+      for (let ci = 0; ci < slices.length; ci++) {
+        const slice = slices[ci]!;
+        const taskRows = initialCompanies[ci]!.tasks;
+        setTaskProgressPanel((prev) => {
+          if (!prev) return prev;
+          return {
+            companies: prev.companies.map((c, i) =>
+              i === ci ? { ...c, cardPhase: "running" } : c,
+            ),
+          };
+        });
+        if (taskRows.length === 0) {
+          setTaskProgressPanel((prev) => {
+            if (!prev) return prev;
+            return {
+              companies: prev.companies.map((c, i) =>
+                i === ci ? { ...c, cardPhase: "done" } : c,
+              ),
+            };
+          });
+          continue;
+        }
+        for (let ti = 0; ti < taskRows.length; ti++) {
+          const tid = taskRows[ti]!.taskId;
+          const taskMeta = visibleTasks.find((x) => x.id === tid);
+          if (!taskMeta) {
+            setTaskProgressPanel((prev) => {
+              if (!prev) return prev;
+              return {
+                companies: prev.companies.map((c, i) => {
+                  if (i !== ci) return c;
+                  return {
+                    ...c,
+                    tasks: c.tasks.map((t, j) =>
+                      j === ti
+                        ? {
+                            ...t,
+                            rowPhase: "error",
+                            rowError: "未找到该任务（可能已被删除）。",
+                          }
+                        : t,
+                    ),
+                  };
+                }),
+              };
+            });
+            continue;
+          }
+          setTaskProgressPanel((prev) => {
+            if (!prev) return prev;
+            return {
+              companies: prev.companies.map((c, i) => {
+                if (i !== ci) return c;
+                return {
+                  ...c,
+                  tasks: c.tasks.map((t, j) =>
+                    j === ti ? { ...t, rowPhase: "loading" } : t,
+                  ),
+                };
+              }),
+            };
+          });
+          try {
+            const inf = await inferTaskProgressFromDaily(env, slice.dailyPlainText, taskMeta);
+            const latest = tasksRef.current.find((x) => x.id === tid) ?? taskMeta;
+            const nextTracking = appendTaskProgressEntry(
+              latest.progressTracking,
+              slice.reportDate,
+              inf.progressBlock,
+            );
+            const taskPatch: Partial<Task> = { progressTracking: nextTracking };
+            if (inf.statusSuggestion) taskPatch.status = inf.statusSuggestion;
+            updateTask(tid, taskPatch);
+            setTaskProgressPanel((prev) => {
+              if (!prev) return prev;
+              return {
+                companies: prev.companies.map((c, i) => {
+                  if (i !== ci) return c;
+                  return {
+                    ...c,
+                    tasks: c.tasks.map((t, j) =>
+                      j === ti
+                        ? {
+                            ...t,
+                            rowPhase: "done",
+                            progressEdit: inf.progressBlock,
+                            statusChoice:
+                              inf.statusSuggestion === null ? "" : inf.statusSuggestion,
+                            currentStatus:
+                              inf.statusSuggestion === null ? t.currentStatus : inf.statusSuggestion,
+                          }
+                        : t,
+                    ),
+                  };
+                }),
+              };
+            });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            setTaskProgressPanel((prev) => {
+              if (!prev) return prev;
+              return {
+                companies: prev.companies.map((c, i) => {
+                  if (i !== ci) return c;
+                  return {
+                    ...c,
+                    tasks: c.tasks.map((t, j) =>
+                      j === ti
+                        ? {
+                            ...t,
+                            rowPhase: "error",
+                            rowError: msg,
+                          }
+                        : t,
+                    ),
+                  };
+                }),
+              };
+            });
+          }
+        }
+        setTaskProgressPanel((prev) => {
+          if (!prev) return prev;
+          return {
+            companies: prev.companies.map((c, i) =>
+              i === ci ? { ...c, cardPhase: "done" } : c,
+            ),
+          };
+        });
+      }
+    } finally {
+      setTaskProgressRunning(false);
+    }
+  }, [visibleTasks, hubBranchParses, parsed, extracted?.text, updateTask]);
+
+  const runDailyPlanTaskGeneration = useCallback(async () => {
+    const env = readLlmEnv();
+    if (!env) {
+      window.alert("请先配置大模型 Key。");
+      return;
+    }
+    if (phase !== "done") {
+      window.alert("请先完成报告解析。");
+      return;
+    }
+    const contexts = collectReportCompanyPlanContexts(hubBranchParses, parsed, extracted?.text ?? null);
+    if (contexts.length === 0) {
+      window.alert(
+        "当前没有可用的分公司日报解析结果（需中台多卡含分公司与正文，或单卡解析含「分公司名称」）。",
+      );
+      return;
+    }
+    setPlanGenPanel({
+      companies: contexts.map((c) => ({
+        companyName: c.companyName,
+        cardPhase: "pending",
+        rows: [],
+        generatedCount: 0,
+      })),
+    });
+    setPlanGenRunning(true);
+    try {
+      for (let ci = 0; ci < contexts.length; ci++) {
+        const ctx = contexts[ci]!;
+        setPlanGenPanel((prev) => {
+          if (!prev) return prev;
+          return {
+            companies: prev.companies.map((co, i) =>
+              i === ci ? { ...co, cardPhase: "running" } : co,
+            ),
+          };
+        });
+        let splitItems: Awaited<ReturnType<typeof llmSplitDailyPlanItemsFromSections>> = [];
+        try {
+          splitItems = await llmSplitDailyPlanItemsFromSections(env, {
+            companyName: ctx.companyName,
+            reportDate: ctx.reportDate,
+            coordinationSection: ctx.coordinationPlain,
+            nextPlanSection: ctx.nextPlanPlain,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setPlanGenPanel((prev) => {
+            if (!prev) return prev;
+            return {
+              companies: prev.companies.map((co, i) =>
+                i === ci
+                  ? {
+                      ...co,
+                      cardPhase: "done",
+                      generatedCount: 0,
+                      rows: [
+                        {
+                          id: `rpg-err-${ci}`,
+                          initiatingDepartment: ctx.companyName,
+                          executingDepartment: ctx.companyName,
+                          reportDate: ctx.reportDate,
+                          requestDescription: "（拆解失败）",
+                          leaderInstruction: "",
+                          rowPhase: "error",
+                          taskCode: null,
+                          rowError: msg,
+                        },
+                      ],
+                    }
+                  : co,
+              ),
+            };
+          });
+          continue;
+        }
+        const rowStates: PlanGenRowState[] = splitItems.map((raw, idx) => ({
+          id: `rpg-${ci}-${idx}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          initiatingDepartment: raw.initiatingDepartment,
+          executingDepartment: raw.executingDepartment,
+          reportDate: ctx.reportDate,
+          requestDescription: raw.requestDescription,
+          leaderInstruction: "",
+          rowPhase: "pending",
+          taskCode: null,
+        }));
+        setPlanGenPanel((prev) => {
+          if (!prev) return prev;
+          return {
+            companies: prev.companies.map((co, i) =>
+              i === ci ? { ...co, rows: rowStates } : co,
+            ),
+          };
+        });
+        if (rowStates.length === 0) {
+          setPlanGenPanel((prev) => {
+            if (!prev) return prev;
+            return {
+              companies: prev.companies.map((co, i) =>
+                i === ci ? { ...co, cardPhase: "done", generatedCount: 0 } : co,
+              ),
+            };
+          });
+          continue;
+        }
+        let okCount = 0;
+        for (let ri = 0; ri < rowStates.length; ri++) {
+          const rs = rowStates[ri]!;
+          setPlanGenPanel((prev) => {
+            if (!prev) return prev;
+            return {
+              companies: prev.companies.map((co, i) => {
+                if (i !== ci) return co;
+                return {
+                  ...co,
+                  rows: co.rows.map((r, j) =>
+                    j === ri ? { ...r, rowPhase: "generating" } : r,
+                  ),
+                };
+              }),
+            };
+          });
+          const leaderInstruction = mergePerspectiveLeaderPrefix(
+            user.perspective,
+            rs.leaderInstruction,
+          );
+          const pendingRow: PendingDailyPlanTaskRow = {
+            id: rs.id,
+            initiatingDepartment: rs.initiatingDepartment,
+            executingDepartment: rs.executingDepartment,
+            reportDate: rs.reportDate,
+            requestDescription: rs.requestDescription,
+            extractionHistoryId: "__report_preview__",
+            jumpNeedle: rs.requestDescription.slice(0, Math.min(48, rs.requestDescription.length)),
+          };
+          try {
+            const input = await generateTaskInputFromDailyPlanRow({
+              row: pendingRow,
+              leaderInstruction,
+              planPerspective: user.perspective,
+            });
+            const created = addTask({ ...input, sourcePendingDailyPlanRowId: pendingRow.id });
+            okCount += 1;
+            setPlanGenPanel((prev) => {
+              if (!prev) return prev;
+              return {
+                companies: prev.companies.map((co, i) => {
+                  if (i !== ci) return co;
+                  return {
+                    ...co,
+                    rows: co.rows.map((r, j) =>
+                      j === ri
+                        ? { ...r, rowPhase: "done", taskCode: created.code }
+                        : r,
+                    ),
+                  };
+                }),
+              };
+            });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            setPlanGenPanel((prev) => {
+              if (!prev) return prev;
+              return {
+                companies: prev.companies.map((co, i) => {
+                  if (i !== ci) return co;
+                  return {
+                    ...co,
+                    rows: co.rows.map((r, j) =>
+                      j === ri
+                        ? { ...r, rowPhase: "error", taskCode: null, rowError: msg }
+                        : r,
+                    ),
+                  };
+                }),
+              };
+            });
+          }
+        }
+        setPlanGenPanel((prev) => {
+          if (!prev) return prev;
+          return {
+            companies: prev.companies.map((co, i) =>
+              i === ci ? { ...co, cardPhase: "done", generatedCount: okCount } : co,
+            ),
+          };
+        });
+      }
+    } finally {
+      setPlanGenRunning(false);
+    }
+  }, [phase, hubBranchParses, parsed, extracted?.text, user.perspective, addTask]);
 
   const removeHistory = useCallback((id: string) => {
     setHistory(removeExtractionHistoryItem(id));
@@ -917,7 +1364,7 @@ export function ReportManagement() {
         <div className="report-preview card nested">
           <div className="card-head tight report-preview-global-head">
             <div className="report-preview-global-head-main">
-              <h3 className="report-preview-global-title">报告提取预览</h3>
+              <h3 className="report-preview-global-title">报告内容提取</h3>
               {hubExtractionProgress && (
                 <div
                   className="hub-global-extract-banner"
@@ -937,6 +1384,23 @@ export function ReportManagement() {
               )}
             </div>
             <div className="preview-actions">
+              <button
+                type="button"
+                className="ghost-btn tiny-btn"
+                disabled={!canRunTaskProgressUpdate}
+                title={
+                  !readLlmEnv()
+                    ? "请先配置大模型"
+                    : phase !== "done"
+                      ? "请先完成解析"
+                      : reportCompanySlices.length === 0
+                        ? "当前提取结果中无有效分公司日报"
+                        : "按分公司依次拉取未完成任务并由模型根据日报填写进度"
+                }
+                onClick={() => void runTaskProgressUpdate()}
+              >
+                更新现有任务进度
+              </button>
               <button
                 type="button"
                 className="primary-btn tiny-btn"
@@ -1070,6 +1534,279 @@ export function ReportManagement() {
             </article>
           )}
         </div>
+
+        {taskProgressPanel && (
+          <div className="report-task-progress-outer card nested">
+            <div className="report-task-progress-outer-top">
+              <h3 className="report-task-progress-outer-title">现有任务进度更新</h3>
+              <button
+                type="button"
+                className="ghost-btn tiny-btn"
+                disabled={!canRunPlanGenFromReport}
+                title={
+                  !readLlmEnv()
+                    ? "请先配置大模型"
+                    : phase !== "done"
+                      ? "请先完成解析"
+                      : planGenContexts.length === 0
+                        ? "当前无可用分公司计划上下文"
+                        : planGenRunning
+                          ? "正在生成中"
+                          : "从解析 JSON 的「需公司协调」「下步计划」拆解条目并写入任务列表"
+                }
+                onClick={() => void runDailyPlanTaskGeneration()}
+              >
+                按日报计划生成新任务
+              </button>
+            </div>
+            <p className="muted small report-task-progress-hint">
+              按当前提取结果中的分公司顺序处理：加载该分公司下未标记「已完成」的任务，由大模型根据对应日报填写进度与困难，并建议状态（可在下方修改）；不会自动写回任务管理，请在任务模块中手动同步。
+            </p>
+            <div className="report-task-progress-companies">
+              {taskProgressPanel.companies.map((card, ci) => (
+                <div key={`${card.companyName}-${ci}`} className="report-task-progress-company card nested">
+                  <div className="report-task-progress-company-head">
+                    <h4 className="report-task-progress-company-title">{card.companyName}</h4>
+                    <div className="report-task-progress-company-meta">
+                      {card.cardPhase === "running" && (
+                        <span
+                          className="parse-status parse-spinner report-task-progress-company-spinner"
+                          aria-hidden
+                          title="正在更新该分公司任务"
+                        />
+                      )}
+                      {card.cardPhase === "done" &&
+                        (card.tasks.length === 0 ? (
+                          <span className="report-task-progress-company-done">✅ 暂无未完成任务</span>
+                        ) : (
+                          <span className="report-task-progress-company-done">
+                            ✅ 已完成{" "}
+                            {card.tasks.filter((t) => t.rowPhase === "done").length}
+                            个任务更新
+                          </span>
+                        ))}
+                    </div>
+                  </div>
+                  {card.tasks.length === 0 ? (
+                    <p className="muted small">当前视角下该分公司没有「未完成」状态的任务。</p>
+                  ) : (
+                    <ul className="report-task-progress-task-list">
+                      {card.tasks.map((row, ti) => (
+                        <li key={row.taskId} className="report-task-progress-task-item">
+                          <div className="report-task-progress-task-head">
+                            <span className="report-task-progress-task-code">{row.code}</span>
+                            <span className="report-task-progress-task-name">{row.description}</span>
+                            {row.rowPhase === "loading" && (
+                              <span
+                                className="parse-status parse-spinner report-task-progress-row-spinner"
+                                aria-label="更新中"
+                                title="更新中"
+                              />
+                            )}
+                            {row.rowPhase === "done" && (
+                              <span className="report-task-progress-row-done" title="已生成建议" aria-hidden>
+                                ✅
+                              </span>
+                            )}
+                            {row.rowPhase === "error" && (
+                              <span className="report-task-progress-row-warn" title={row.rowError}>
+                                ⚠️
+                              </span>
+                            )}
+                          </div>
+                          {row.rowError && (
+                            <p className="report-hint danger tiny-gap">{row.rowError}</p>
+                          )}
+                          <label className="report-task-progress-label">进度更新</label>
+                          <textarea
+                            className="report-task-progress-textarea"
+                            rows={3}
+                            value={row.progressEdit}
+                            disabled={row.rowPhase === "loading"}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setTaskProgressPanel((prev) => {
+                                if (!prev) return prev;
+                                return {
+                                  companies: prev.companies.map((c, i) =>
+                                    i !== ci
+                                      ? c
+                                      : {
+                                          ...c,
+                                          tasks: c.tasks.map((t, j) =>
+                                            j === ti ? { ...t, progressEdit: v } : t,
+                                          ),
+                                        },
+                                  ),
+                                };
+                              });
+                            }}
+                          />
+                          <label className="report-task-progress-label">状态更新</label>
+                          <div className="report-task-progress-status-row">
+                            <select
+                              className="report-task-progress-select"
+                              value={row.statusChoice === "" ? "" : row.statusChoice}
+                              disabled={row.rowPhase === "loading"}
+                              onChange={(e) => {
+                                const v = e.target.value as "" | TaskStatus;
+                                setTaskProgressPanel((prev) => {
+                                  if (!prev) return prev;
+                                  return {
+                                    companies: prev.companies.map((c, i) =>
+                                      i !== ci
+                                        ? c
+                                        : {
+                                            ...c,
+                                            tasks: c.tasks.map((t, j) =>
+                                              j === ti ? { ...t, statusChoice: v } : t,
+                                            ),
+                                          },
+                                    ),
+                                  };
+                                });
+                              }}
+                            >
+                              <option value="">维持不变</option>
+                              {STATUSES.map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
+                            </select>
+                            <span className="muted tiny">任务当前状态：{row.currentStatus}</span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {planGenPanel && (
+          <div className="report-plan-gen-outer card nested">
+            <h3 className="report-plan-gen-title">日报计划任务生成</h3>
+            <p className="muted small report-plan-gen-hint">
+              按分公司顺序：从解析结果中读取「6.1 需公司协调」「6.2
+              下步计划」摘录，先由模型拆成表格行，再逐行调用与看板相同的逻辑生成任务（已写入任务管理）。发起日期为日报「提取日期」。
+            </p>
+            <div className="report-plan-gen-companies">
+              {planGenPanel.companies.map((card, ci) => (
+                <div key={`${card.companyName}-${ci}`} className="report-plan-gen-company card nested">
+                  <div className="report-plan-gen-company-head">
+                    <h4 className="report-plan-gen-company-title">{card.companyName}</h4>
+                    <div className="report-plan-gen-company-meta">
+                      {card.cardPhase === "running" && (
+                        <span
+                          className="parse-status parse-spinner report-plan-gen-company-spinner"
+                          aria-hidden
+                          title="正在生成本分公司计划任务"
+                        />
+                      )}
+                      {card.cardPhase === "done" && (
+                        <span className="report-plan-gen-company-done">
+                          ✅ 已完成 {card.generatedCount} 个任务生成
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="table-wrap pending-sub-table-wrap">
+                    <table className="data-table pending-sub-table pending-sub-table--pending-tasks pending-sub-table--daily-plan-gen">
+                      <thead>
+                        <tr>
+                          <th className="pending-sub-col-dept">发起部门</th>
+                          <th className="pending-sub-col-dept">执行部门</th>
+                          <th className="pending-sub-col-date">发起日期</th>
+                          <th>请求描述</th>
+                          <th className="pending-sub-col-leader">领导指示/建议</th>
+                          <th className="pending-sub-col-gen">任务生成</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {card.cardPhase === "running" && card.rows.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="empty-cell muted">
+                              正在读取「需公司协调 / 下步计划」并拆解计划条目…
+                            </td>
+                          </tr>
+                        )}
+                        {card.rows.map((row) => (
+                          <tr key={row.id}>
+                            <td className="pending-sub-col-dept">{row.initiatingDepartment}</td>
+                            <td className="pending-sub-col-dept">{row.executingDepartment}</td>
+                            <td className="pending-sub-col-date">{row.reportDate}</td>
+                            <td className="clamp wide">{row.requestDescription}</td>
+                            <td className="pending-sub-col-leader">
+                              <input
+                                type="text"
+                                className="pending-leader-instruct-input"
+                                value={row.leaderInstruction}
+                                disabled={planGenRunning || row.rowPhase === "generating"}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setPlanGenPanel((prev) => {
+                                    if (!prev) return prev;
+                                    return {
+                                      companies: prev.companies.map((c, i) =>
+                                        i !== ci
+                                          ? c
+                                          : {
+                                              ...c,
+                                              rows: c.rows.map((r) =>
+                                                r.id === row.id ? { ...r, leaderInstruction: v } : r,
+                                              ),
+                                            },
+                                      ),
+                                    };
+                                  });
+                                }}
+                                placeholder="截止日、协办部门等"
+                                aria-label={`领导指示：${row.requestDescription.slice(0, 24)}`}
+                              />
+                            </td>
+                            <td
+                              className={`pending-sub-col-gen${row.taskCode ? " pending-sub-col-gen--has-task" : ""}`}
+                            >
+                              {row.rowPhase === "generating" && (
+                                <span
+                                  className="parse-status parse-spinner"
+                                  aria-label="生成中"
+                                  title="生成中"
+                                />
+                              )}
+                              {row.rowPhase === "done" && row.taskCode && (
+                                <span className="pending-gen-code" title={row.taskCode}>
+                                  {row.taskCode}
+                                </span>
+                              )}
+                              {row.rowPhase === "pending" && <span className="muted tiny">待生成</span>}
+                              {row.rowPhase === "error" && (
+                                <span className="report-plan-gen-cell-err" title={row.rowError}>
+                                  ⚠️ {row.rowError?.slice(0, 80)}
+                                  {row.rowError && row.rowError.length > 80 ? "…" : ""}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                        {card.cardPhase === "done" && card.rows.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="empty-cell">
+                              未拆解出可生成条目（6.1/6.2 无实质内容或模型返回空列表）。
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
       )}
 

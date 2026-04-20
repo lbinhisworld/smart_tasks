@@ -23,10 +23,34 @@ import {
   isBranchCompanyUnit,
   taskVisibleForPerspective,
 } from "../utils/leaderPerspective";
-import type { CurrentUser, Task, TaskCategory, TaskStatus } from "../types/task";
+import type {
+  CurrentUser,
+  Task,
+  TaskCategory,
+  TaskProgressEntry,
+  TaskStatus,
+} from "../types/task";
 
 const STORAGE_KEY = "qifeng_smart_tasks_v1";
 const USER_KEY = "qifeng_smart_tasks_user_v1";
+
+function normalizeProgressTracking(raw: unknown): TaskProgressEntry[] | undefined {
+  if (raw == null) return undefined;
+  if (!Array.isArray(raw)) return undefined;
+  const out: TaskProgressEntry[] = [];
+  for (const el of raw) {
+    if (!el || typeof el !== "object") continue;
+    const o = el as Record<string, unknown>;
+    const date = o.date;
+    const description = o.description;
+    if (typeof date !== "string" || typeof description !== "string") continue;
+    const d = date.trim();
+    const desc = description.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !desc) continue;
+    out.push({ date: d, description: desc });
+  }
+  return out.length ? out : undefined;
+}
 
 function normalizeStoredTask(t: Task): Task {
   const execRaw =
@@ -48,7 +72,17 @@ function normalizeStoredTask(t: Task): Task {
     typeof (t as { taskMotivation?: unknown }).taskMotivation === "string"
       ? (t as { taskMotivation: string }).taskMotivation.trim()
       : "";
-  return { ...t, executingDepartment: execRaw, branch, workshop, taskMotivation };
+  const progressTracking = normalizeProgressTracking(
+    (t as { progressTracking?: unknown }).progressTracking,
+  );
+  return {
+    ...t,
+    executingDepartment: execRaw,
+    branch,
+    workshop,
+    taskMotivation,
+    ...(progressTracking ? { progressTracking } : {}),
+  };
 }
 
 function loadTasks(): Task[] {

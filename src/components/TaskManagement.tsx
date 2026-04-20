@@ -307,6 +307,7 @@ export function TaskManagement() {
                 <th>描述</th>
                 <th>期待完成</th>
                 <th>状态</th>
+                <th>进度跟踪</th>
                 <th />
               </tr>
             </thead>
@@ -351,6 +352,11 @@ export function TaskManagement() {
                       ))}
                     </select>
                   </td>
+                  <td className="muted tiny">
+                    {t.progressTracking?.length
+                      ? `${t.progressTracking.length}条`
+                      : "—"}
+                  </td>
                   <td className="actions">
                     <button type="button" className="text-btn" onClick={() => toggleFollow(t.id)}>
                       {t.followedByUser ? "已关注" : "关注"}
@@ -376,7 +382,7 @@ export function TaskManagement() {
               ))}
               {visibleTasks.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="empty-cell">
+                  <td colSpan={13} className="empty-cell">
                     当前视角下没有可见任务。
                   </td>
                 </tr>
@@ -773,6 +779,7 @@ function EditForm({
   const [draft, setDraft] = useState(() => ({
     ...task,
     taskMotivation: task.taskMotivation?.trim() ?? "",
+    progressTracking: [...(task.progressTracking ?? [])],
   }));
   const [receiversStr, setReceiversStr] = useState(() =>
     task.receiverDepartments?.length
@@ -832,6 +839,9 @@ function EditForm({
           workshop,
           receiverDepartments,
           receiverDepartment: undefined,
+          ...(draft.progressTracking?.length
+            ? { progressTracking: [...draft.progressTracking] }
+            : { progressTracking: undefined }),
         });
       }}
     >
@@ -952,6 +962,35 @@ function EditForm({
           ))}
         </select>
       </label>
+      <div className="full task-progress-tracking-section">
+        <div className="task-progress-tracking-heading">进度跟踪</div>
+        {!draft.progressTracking?.length ? (
+          <p className="muted small task-progress-tracking-empty">
+            暂无进展记录；可在<strong>报告</strong>页「现有任务进度更新」中根据日报写入。
+          </p>
+        ) : (
+          <div className="table-wrap task-progress-tracking-table-wrap">
+            <table className="data-table task-progress-tracking-table">
+              <thead>
+                <tr>
+                  <th className="task-progress-tracking-col-date">日期</th>
+                  <th>进展描述</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...draft.progressTracking]
+                  .sort((a, b) => a.date.localeCompare(b.date) || a.description.localeCompare(b.description))
+                  .map((row, idx) => (
+                    <tr key={`${row.date}-${idx}-${row.description.slice(0, 12)}`}>
+                      <td className="mono task-progress-tracking-col-date">{row.date}</td>
+                      <td className="task-text-wrap">{row.description}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
       <div className="form-actions full">
         <button type="button" className="ghost-btn" onClick={onClose}>
           取消

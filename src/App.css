@@ -1589,6 +1589,36 @@ button.pending-date-to-report:hover {
   grid-column: 1 / -1;
 }
 
+.task-progress-tracking-section {
+  grid-column: 1 / -1;
+}
+
+.task-progress-tracking-heading {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.task-progress-tracking-empty {
+  margin: 0;
+}
+
+.task-progress-tracking-table-wrap {
+  max-height: 240px;
+  overflow: auto;
+}
+
+.task-progress-tracking-table th,
+.task-progress-tracking-table td {
+  font-size: 0.82rem;
+}
+
+.task-progress-tracking-col-date {
+  width: 7.5rem;
+  white-space: nowrap;
+}
+
 .task-form input,
 .task-form select,
 .task-form textarea {
@@ -2024,6 +2054,217 @@ button.pending-date-to-report:hover {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+/* 报告内容提取下方：按分公司更新任务进度 */
+.report-task-progress-outer {
+  margin-top: 16px;
+}
+
+.report-task-progress-outer-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.report-task-progress-outer-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.report-task-progress-hint {
+  margin: 0 0 12px;
+}
+
+.report-task-progress-companies {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.report-task-progress-company {
+  margin-top: 0;
+}
+
+.report-task-progress-company-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.report-task-progress-company-title {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.report-task-progress-company-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #0d9f6e;
+}
+
+.report-task-progress-company-spinner {
+  flex-shrink: 0;
+}
+
+.report-task-progress-company-done {
+  white-space: nowrap;
+}
+
+.report-task-progress-task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.report-task-progress-task-item {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+
+.report-task-progress-task-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.report-task-progress-task-code {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+
+.report-task-progress-task-name {
+  flex: 1 1 200px;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.report-task-progress-row-spinner {
+  flex-shrink: 0;
+}
+
+.report-task-progress-row-done,
+.report-task-progress-row-warn {
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.tiny-gap {
+  margin: 0 0 8px;
+}
+
+.report-task-progress-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin: 6px 0 4px;
+  color: var(--muted);
+}
+
+.report-task-progress-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  resize: vertical;
+  min-height: 72px;
+}
+
+.report-task-progress-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.report-task-progress-select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 0.86rem;
+  background: #fff;
+}
+
+/* 报告页：日报计划任务生成（对齐看板「日报计划提取任务」表） */
+.report-plan-gen-outer {
+  margin-top: 16px;
+}
+
+.report-plan-gen-title {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+
+.report-plan-gen-hint {
+  margin: 0 0 12px;
+}
+
+.report-plan-gen-companies {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.report-plan-gen-company {
+  margin-top: 0;
+}
+
+.report-plan-gen-company-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.report-plan-gen-company-title {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.report-plan-gen-company-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #0d9f6e;
+}
+
+.report-plan-gen-company-spinner {
+  flex-shrink: 0;
+}
+
+.report-plan-gen-company-done {
+  white-space: nowrap;
+}
+
+.report-plan-gen-cell-err {
+  font-size: 0.78rem;
+  color: #991b1b;
 }
 
 /* 报告提取预览：顶栏 + 多任务卡 + 每卡内三步 Tab（箭头色块） */
