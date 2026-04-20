@@ -39,6 +39,12 @@ import {
   tryParseDataHubDailyListJson,
   type HubDailyStandardRow,
 } from "../utils/extractDataHubDailyList";
+import {
+  clearReportExtractionPreviewDraft,
+  loadReportExtractionPreviewDraft,
+  saveReportExtractionPreviewDraft,
+  type StoredHubBranchParse as HubBranchParse,
+} from "../utils/reportExtractionPreviewDraft";
 import { formatLlmStatsParts } from "../utils/formatLlmStats";
 import { extractTextFromFile } from "../utils/extractFileText";
 import { buildPendingTasksFromSavedReport } from "../utils/buildPendingTasksFromSavedReport";
@@ -62,21 +68,6 @@ import { ReportJsonPreview } from "./ReportJsonPreview";
 type Phase = "idle" | "reading" | "calling" | "done" | "error";
 
 type ReportMgmtTab = "extract" | "history";
-
-/** 数据中台批量解析后，每个分公司日报对应一条预览与可保存记录 */
-type HubBranchParseStatus = "extracting" | "done" | "error";
-
-type HubBranchParse = {
-  id: string;
-  title: string;
-  row: HubDailyStandardRow;
-  rawModel: string | null;
-  parsed: unknown | null;
-  llmError?: string;
-  status: HubBranchParseStatus;
-  /** 折叠：提取结束后默认 false（折叠）；提取中为 true（展开） */
-  detailsOpen: boolean;
-};
 
 function aggregateLlmStats(parts: LlmCallStats[]): LlmCallStats | null {
   if (parts.length === 0) return null;
@@ -133,6 +124,64 @@ export function ReportManagement() {
     current: number;
     total: number;
   } | null>(null);
+
+  useEffect(() => {
+    const d = loadReportExtractionPreviewDraft();
+    if (!d) return;
+    if (d.mode === "single") {
+      setExtracted(d.extracted);
+      setRawModel(d.rawModel);
+      setParsed(d.parsed);
+      setLlmCallStats(d.llmCallStats);
+      setError(d.parseError);
+      setPhase("done");
+      setHubStandardRows(null);
+      setHubBranchParses(null);
+      setHubExtractionProgress(null);
+      setManualFromDataHub(false);
+    } else {
+      setHubStandardRows(d.hubStandardRows);
+      setHubBranchParses(d.hubBranchParses);
+      setLlmCallStats(d.llmCallStats);
+      setPhase("done");
+      setRawModel(null);
+      setParsed(null);
+      setExtracted(null);
+      setManualFromDataHub(true);
+      setHubExtractionProgress(null);
+      setError(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (phase !== "done") return;
+    if (hubBranchParses && hubBranchParses.length > 0) {
+      const rows =
+        hubStandardRows && hubStandardRows.length > 0
+          ? hubStandardRows
+          : hubBranchParses.map((b) => b.row);
+      saveReportExtractionPreviewDraft({
+        version: 1,
+        mode: "hub",
+        manualFromDataHub: true,
+        hubStandardRows: rows,
+        hubBranchParses,
+        llmCallStats,
+      });
+      return;
+    }
+    if (rawModel && extracted?.text?.trim()) {
+      saveReportExtractionPreviewDraft({
+        version: 1,
+        mode: "single",
+        extracted,
+        rawModel,
+        parsed,
+        llmCallStats,
+        parseError: error,
+      });
+    }
+  }, [phase, hubBranchParses, hubStandardRows, rawModel, parsed, extracted, llmCallStats, error]);
 
   useEffect(() => {
     historyRef.current = history;
@@ -223,6 +272,7 @@ export function ReportManagement() {
       );
       return;
     }
+    clearReportExtractionPreviewDraft();
     setFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
     setManualText(text);
@@ -266,6 +316,7 @@ export function ReportManagement() {
     setFile(f ?? null);
     if (f) setManualText("");
     setManualFromDataHub(false);
+    clearReportExtractionPreviewDraft();
     setExtracted(null);
     setRawModel(null);
     setParsed(null);
@@ -278,6 +329,7 @@ export function ReportManagement() {
     setFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
     setManualFromDataHub(false);
+    clearReportExtractionPreviewDraft();
     setExtracted(null);
     setRawModel(null);
     setParsed(null);
@@ -293,6 +345,7 @@ export function ReportManagement() {
     if (v.trim() !== "") {
       setFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
+      clearReportExtractionPreviewDraft();
       setExtracted(null);
       setRawModel(null);
       setParsed(null);
@@ -306,7 +359,9 @@ export function ReportManagement() {
   const fileFromTextLocked = manualText.trim() !== "";
 
   const parseReport = useCallback(async () => {
+    clearReportExtractionPreviewDraft();
     setError(null);
+    setExtracted(null);
     setRawModel(null);
     setParsed(null);
     setLlmCallStats(null);
@@ -510,6 +565,7 @@ export function ReportManagement() {
     if (hubBranchParses?.length) {
       const ok = hubBranchParses.filter((b) => b.rawModel && b.row.content?.trim());
       if (ok.length === 0) return;
+      clearReportExtractionPreviewDraft();
       let latest: ExtractionHistoryItem[] = [];
       for (const b of [...ok].reverse()) {
         const parsedClone =
@@ -553,6 +609,7 @@ export function ReportManagement() {
     }
 
     if (!rawModel || !extracted?.text?.trim()) return;
+    clearReportExtractionPreviewDraft();
     const parsedClone =
       parsed != null
         ? (JSON.parse(JSON.stringify(parsed)) as unknown)
