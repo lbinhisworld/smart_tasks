@@ -17,18 +17,24 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import {
+  coerceTaskCategoryPair,
+  getDefaultCategoryPair,
+  LEGACY_FLAT_CATEGORY_MAP,
+} from "../data/taskCategories";
 import { SEED_TASKS } from "../data/seedTasks";
 import {
   GROUP_LEADER_PERSPECTIVE,
   isBranchCompanyUnit,
   taskVisibleForPerspective,
 } from "../utils/leaderPerspective";
-import type {
-  CurrentUser,
-  Task,
-  TaskCategory,
-  TaskProgressEntry,
-  TaskStatus,
+import { buildAutoTaskCode } from "../utils/taskCode";
+import {
+  type CurrentUser,
+  normalizeTaskStatusField,
+  type Task,
+  type TaskProgressEntry,
+  type TaskStatus,
 } from "../types/task";
 
 const STORAGE_KEY = "qifeng_smart_tasks_v1";
@@ -50,6 +56,23 @@ function normalizeProgressTracking(raw: unknown): TaskProgressEntry[] | undefine
     out.push({ date: d, description: desc });
   }
   return out.length ? out : undefined;
+}
+
+function normalizeTaskCategories(raw: Task & { category?: string }): {
+  categoryLevel1: string;
+  categoryLevel2: string;
+} {
+  const any = raw as Task & { category?: string; categoryLevel1?: string; categoryLevel2?: string };
+  const l1 = any.categoryLevel1?.trim() ?? "";
+  const l2 = any.categoryLevel2?.trim() ?? "";
+  if (l1 && l2) return coerceTaskCategoryPair(l1, l2);
+  const leg = any.category?.trim();
+  if (leg && LEGACY_FLAT_CATEGORY_MAP[leg]) {
+    const m = LEGACY_FLAT_CATEGORY_MAP[leg];
+    return coerceTaskCategoryPair(m.categoryLevel1, m.categoryLevel2);
+  }
+  if (l1 || l2) return coerceTaskCategoryPair(l1, l2);
+  return getDefaultCategoryPair();
 }
 
 function normalizeStoredTask(t: Task): Task {
@@ -75,12 +98,34 @@ function normalizeStoredTask(t: Task): Task {
   const progressTracking = normalizeProgressTracking(
     (t as { progressTracking?: unknown }).progressTracking,
   );
+  const row = t as Task & { category?: string };
+  const {
+    category: _legacyCategory,
+    coordinationParty: _cpIn,
+    leaderInstruction: _liIn,
+    ...rest
+  } = row;
+  const cats = normalizeTaskCategories(row);
+  const status = normalizeTaskStatusField(row.status);
+  const cpRaw =
+    typeof (row as { coordinationParty?: unknown }).coordinationParty === "string"
+      ? (row as { coordinationParty: string }).coordinationParty.trim()
+      : "";
+  const coordinationParty =
+    status === "卡住待协调" && cpRaw ? cpRaw : undefined;
+  const leaderInstruction =
+    typeof _liIn === "string" && _liIn.trim() ? _liIn.trim() : undefined;
   return {
-    ...t,
+    ...rest,
     executingDepartment: execRaw,
     branch,
     workshop,
     taskMotivation,
+    status,
+    categoryLevel1: cats.categoryLevel1,
+    categoryLevel2: cats.categoryLevel2,
+    ...(coordinationParty ? { coordinationParty } : {}),
+    ...(leaderInstruction ? { leaderInstruction } : {}),
     ...(progressTracking ? { progressTracking } : {}),
   };
 }
@@ -164,20 +209,23 @@ export function TaskProvider({ children }: { children: ReactNode }) {
       },
     ): Task => {
       const id = `t_${Date.now()}`;
-      const deptKey = (input.department?.trim() || "集").slice(0, 2);
-      const execKey = (input.executingDepartment?.trim() || "执").slice(0, 2);
-      const code =
-        input.code ?? `QF-${deptKey}-${execKey}-${String(tasks.length + 1).padStart(3, "0")}`;
-      const row: Task = {
-        ...input,
-        id,
-        code,
-        createdAt: new Date().toISOString().slice(0, 10),
-      };
-      setTasks((prev) => [row, ...prev]);
+      const createdAt = new Date().toISOString().slice(0, 10);
+      let row!: Task;
+      setTasks((prev) => {
+        const code =
+          input.code ??
+          buildAutoTaskCode(input.department ?? "", input.categoryLevel1 ?? "", prev);
+        row = {
+          ...input,
+          id,
+          code,
+          createdAt,
+        };
+        return [row, ...prev];
+      });
       return row;
     },
-    [tasks.length],
+    [],
   );
 
   const updateTask = useCallback((id: string, patch: Partial<Task>) => {
@@ -226,5 +274,4 @@ export function useTasks() {
   return ctx;
 }
 
-export const CATEGORIES: TaskCategory[] = ["安全生产", "技改项目", "质量与环保"];
-export const STATUSES: TaskStatus[] = ["进行中", "已完成", "实质性进展"];
+export const STATUSES: TaskStatus[] = ["进行中", "实质性进展", "卡住待协调", "已完成"];

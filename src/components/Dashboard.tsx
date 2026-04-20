@@ -5,8 +5,8 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { TASK_CATEGORY_LEVEL1_LIST } from "../data/taskCategories";
 import { useTasks } from "../context/TaskContext";
-import type { TaskCategory } from "../types/task";
 import { extractionHistoryVisibleForPerspective } from "../utils/leaderPerspective";
 import { loadExtractionHistory } from "../utils/extractionHistoryStorage";
 import { riskForTask, riskLabel } from "../utils/risk";
@@ -23,13 +23,12 @@ function inMonth(isoDate: string, key: string) {
   return isoDate.slice(0, 7) === key;
 }
 
-const CATEGORY_META: Record<
-  TaskCategory,
-  { title: string; subtitle: string }
-> = {
-  安全生产: { title: "安全生产任务", subtitle: "消防、危化、双控与现场治理" },
-  技改项目: { title: "技改与投资项目", subtitle: "产线改造、装备升级与节能降耗" },
-  质量与环保: { title: "质量与环保任务", subtitle: "客户质量、排放与体系审核" },
+const CATEGORY_META: Record<string, { title: string; subtitle: string }> = {
+  "安全环保管控类 (HSE)": { title: "安全环保管控", subtitle: "隐患整改、违章纠偏、季节性防御与合规核查" },
+  "生产能效对标类 (Production)": { title: "生产能效对标", subtitle: "产量、单耗、损纸消纳与成本分析" },
+  "质量专项攻坚类 (Quality)": { title: "质量专项攻坚", subtitle: "纸病、工艺指标、客户反馈与新品试验" },
+  "设备本质安全类 (Maintenance)": { title: "设备本质安全", subtitle: "维保、技改、备件资产与外部干扰防护" },
+  "管理作风与赋能类 (Management)": { title: "管理作风与赋能", subtitle: "标准闭环、技能培训与精益标准化" },
 };
 
 type HomeBoardTab = "tasks" | "reports";
@@ -110,12 +109,13 @@ export function Dashboard() {
 
   const following = useMemo(() => visibleTasks.filter((t) => t.followedByUser), [visibleTasks]);
 
-  const byCategory = (cat: TaskCategory) => {
-    const subset = visibleTasks.filter((t) => t.category === cat);
+  const byCategory = (cat: string) => {
+    const subset = visibleTasks.filter((t) => t.categoryLevel1 === cat);
     const completed = subset.filter((t) => t.status === "已完成").length;
     const solid = subset.filter((t) => t.status === "实质性进展").length;
     const ongoing = subset.filter((t) => t.status === "进行中").length;
-    return { subset, completed, solid, ongoing };
+    const stuck = subset.filter((t) => t.status === "卡住待协调").length;
+    return { subset, completed, solid, ongoing, stuck };
   };
 
   return (
@@ -284,9 +284,9 @@ export function Dashboard() {
         />
 
         <section className="category-row">
-          {(Object.keys(CATEGORY_META) as TaskCategory[]).map((cat) => {
-            const meta = CATEGORY_META[cat];
-            const { subset, completed, solid, ongoing } = byCategory(cat);
+          {TASK_CATEGORY_LEVEL1_LIST.map((cat) => {
+            const meta = CATEGORY_META[cat] ?? { title: cat, subtitle: "" };
+            const { subset, completed, solid, ongoing, stuck } = byCategory(cat);
             return (
               <div key={cat} className="card cat-card">
                 <div className="card-head tight">
@@ -309,13 +309,16 @@ export function Dashboard() {
                       : ""}
                   </span>
                 </div>
-                <Donut
-                  segments={[
-                    { label: "已完成", value: completed, color: "#0d9f6e" },
-                    { label: "实质性进展", value: solid, color: "#d4a012" },
-                    { label: "进行中", value: ongoing, color: "#1d6bc6" },
-                  ]}
-                />
+                {subset.length > 0 ? (
+                  <Donut
+                    segments={[
+                      { label: "已完成", value: completed, color: "#0d9f6e" },
+                      { label: "实质性进展", value: solid, color: "#1d6bc6" },
+                      { label: "进行中", value: ongoing, color: "#ea580c" },
+                      { label: "卡住待协调", value: stuck, color: "#dc2626" },
+                    ]}
+                  />
+                ) : null}
               </div>
             );
           })}

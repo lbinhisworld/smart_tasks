@@ -60,14 +60,26 @@ export type ReportSidePanelsDraftV1 = {
   planGenPanel: StoredPlanGenPanelState | null;
 };
 
-const STATUSES_SET = new Set<TaskStatus>(["进行中", "已完成", "实质性进展"]);
+const STATUSES_SET = new Set<TaskStatus>([
+  "进行中",
+  "已完成",
+  "实质性进展",
+  "卡住待协调",
+]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function parseTaskStatus(v: unknown): TaskStatus | null {
-  if (v === "进行中" || v === "已完成" || v === "实质性进展") return v;
+  if (
+    v === "进行中" ||
+    v === "已完成" ||
+    v === "实质性进展" ||
+    v === "卡住待协调"
+  ) {
+    return v;
+  }
   return null;
 }
 

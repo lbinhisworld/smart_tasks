@@ -838,7 +838,15 @@ export function ReportManagement() {
               inf.progressBlock,
             );
             const taskPatch: Partial<Task> = { progressTracking: nextTracking };
-            if (inf.statusSuggestion) taskPatch.status = inf.statusSuggestion;
+            if (inf.statusSuggestion) {
+              taskPatch.status = inf.statusSuggestion;
+              if (inf.statusSuggestion !== "卡住待协调") {
+                taskPatch.coordinationParty = undefined;
+              }
+            }
+            if (inf.leaderInstruction) {
+              taskPatch.leaderInstruction = inf.leaderInstruction;
+            }
             updateTask(tid, taskPatch);
             setTaskProgressPanel((prev) => {
               if (!prev) return prev;

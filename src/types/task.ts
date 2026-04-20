@@ -1,6 +1,14 @@
-export type TaskStatus = "进行中" | "已完成" | "实质性进展";
+export type TaskStatus = "进行中" | "已完成" | "实质性进展" | "卡住待协调";
 
-export type TaskCategory = "安全生产" | "技改项目" | "质量与环保";
+/** 任务处于「卡住待协调」时的协调方（必选其一） */
+export const COORDINATION_PARTY_OPTIONS = ["集团公司", "各职能部门", "分公司领导"] as const;
+
+export type CoordinationPartyOption = (typeof COORDINATION_PARTY_OPTIONS)[number];
+
+export function normalizeTaskStatusField(v: unknown): TaskStatus {
+  if (v === "进行中" || v === "已完成" || v === "实质性进展" || v === "卡住待协调") return v;
+  return "进行中";
+}
 
 export type RiskLevel = "high" | "medium" | "low";
 
@@ -19,13 +27,24 @@ export interface Task {
   department: string;
   /** 执行部门：任务落地组织，须为架构中的职能部门或分公司（集团视角下可填任意非空名称） */
   executingDepartment: string;
-  category: TaskCategory;
+  /** 任务大类（与 `src/data/taskCategories.ts` 中 level_1 一致） */
+  categoryLevel1: string;
+  /** 任务子类（与对应大类下 level_2[].name 一致） */
+  categoryLevel2: string;
   /** 任务动因：立项背景、触发原因或政策/事件依据（与「任务描述」区分） */
   taskMotivation: string;
   description: string;
+  /**
+   * 领导指示 / 建议原文或快照：来自日报计划「领导指示/建议」写入，或由日报进度推断在正文中明确对应本任务的指示。
+   */
+  leaderInstruction?: string;
   /** 期待完成：`YYYY-MM-DD`，或无任何明确截止要求时为「待定」 */
   expectedCompletion: string;
   status: TaskStatus;
+  /**
+   * 协调方：仅当 `status === "卡住待协调"` 时有效，须为 {@link COORDINATION_PARTY_OPTIONS} 之一。
+   */
+  coordinationParty?: string;
   /** 当执行部门为分公司时与之一致；职能部门执行时为「」 */
   branch: string;
   /** 历史兼容：新建任务不再填写车间，保留字段供旧数据与看板车间范围筛选 */
