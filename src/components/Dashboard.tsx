@@ -287,6 +287,7 @@ export function Dashboard() {
           {TASK_CATEGORY_LEVEL1_LIST.map((cat) => {
             const meta = CATEGORY_META[cat] ?? { title: cat, subtitle: "" };
             const { subset, completed, solid, ongoing, stuck } = byCategory(cat);
+            if (subset.length === 0) return null;
             return (
               <div key={cat} className="card cat-card">
                 <div className="card-head tight">
@@ -309,16 +310,14 @@ export function Dashboard() {
                       : ""}
                   </span>
                 </div>
-                {subset.length > 0 ? (
-                  <Donut
-                    segments={[
-                      { label: "已完成", value: completed, color: "#0d9f6e" },
-                      { label: "实质性进展", value: solid, color: "#1d6bc6" },
-                      { label: "进行中", value: ongoing, color: "#ea580c" },
-                      { label: "卡住待协调", value: stuck, color: "#dc2626" },
-                    ]}
-                  />
-                ) : null}
+                <Donut
+                  segments={[
+                    { label: "已完成", value: completed, color: "#0d9f6e" },
+                    { label: "实质性进展", value: solid, color: "#1d6bc6" },
+                    { label: "进行中", value: ongoing, color: "#ea580c" },
+                    { label: "卡住待协调", value: stuck, color: "#dc2626" },
+                  ]}
+                />
               </div>
             );
           })}
