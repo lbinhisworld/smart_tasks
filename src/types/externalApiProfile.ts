@@ -42,7 +42,8 @@ export interface ExternalApiProfile {
   lastTestOk?: boolean;
   /**
    * 业务数据表格中要展示的列名（与 `extractBusinessRowsFromJson` 产出的列名一致）。
-   * 未设置或空数组表示展示全部列。
+   * 未设置表示展示全部列且顺序与解析结果一致；空数组表示不展示任何列。
+   * 非空时**数组顺序即为表格列顺序**（可小于全部列，表示仅展示勾选列并按此顺序）。
    */
   visibleBusinessFields?: string[];
   /**

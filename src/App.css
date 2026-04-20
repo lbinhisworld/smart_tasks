@@ -3414,6 +3414,11 @@ button.pending-date-to-report:hover {
   margin-bottom: 8px;
 }
 
+.data-sync-field-picker-dnd-hint {
+  margin: 0 0 8px;
+  line-height: 1.45;
+}
+
 .data-sync-field-picker-actions {
   display: flex;
   flex-wrap: wrap;
@@ -3423,14 +3428,35 @@ button.pending-date-to-report:hover {
 
 .data-sync-field-checkboxes {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  max-height: 160px;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
   overflow: auto;
   padding: 8px 10px;
   background: #f8fafc;
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.data-sync-field-picker-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.data-sync-field-drag-handle {
+  flex-shrink: 0;
+  cursor: grab;
+  user-select: none;
+  color: #64748b;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  padding: 2px 2px 0 0;
+}
+
+.data-sync-field-drag-handle:active {
+  cursor: grabbing;
 }
 
 .data-sync-field-check-label {
@@ -3440,6 +3466,8 @@ button.pending-date-to-report:hover {
   font-size: 0.8rem;
   color: #334155;
   max-width: 100%;
+  min-width: 0;
+  flex: 1;
 }
 
 .data-sync-field-check-label span {

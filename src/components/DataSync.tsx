@@ -27,6 +27,23 @@ import { parseCurl } from "../utils/parseCurl";
 
 const RESPONSE_PREVIEW_MAX = 200_000;
 const TEST_TIMEOUT_MS = 30_000;
+/** `dataTransfer` 类型标识：自定义展示字段列表项在拖拽重排时的源下标 */
+const DATA_HUB_FIELD_DRAG_MIME = "application/x-smarttasks-field-picker-index";
+
+/**
+ * 自定义展示字段区列表顺序：已选列按 `visibleBusinessFields` 顺序在前，未选列按接口解析列顺序在后。
+ * @param all 当前 JSON 解析出的全部列名
+ * @param vis 已保存的可见列配置；`undefined`/`null` 视为全选且顺序同 `all`
+ */
+function buildDataHubFieldPickerOrder(all: string[], vis: string[] | null | undefined): string[] {
+  if (!all.length) return [];
+  if (vis === undefined || vis === null) return [...all];
+  if (vis.length === 0) return [...all];
+  const visSet = new Set(vis);
+  const head = vis.filter((c) => all.includes(c));
+  const tail = all.filter((c) => !visSet.has(c));
+  return [...head, ...tail];
+}
 /** 单元格超过该长度时显示为可点击展开（仍可点击短文本查看） */
 const CELL_PREVIEW_CHARS = 120;
 
@@ -284,9 +301,14 @@ export function DataSync() {
     const vis = selected?.visibleBusinessFields;
     if (vis === undefined || vis === null) return columns;
     if (vis.length === 0) return [];
-    const set = new Set(vis);
-    return columns.filter((c) => set.has(c));
+    const colSet = new Set(columns);
+    return vis.filter((c) => colSet.has(c));
   }, [businessExtracted.columns, selected?.visibleBusinessFields]);
+
+  const fieldPickerOrder = useMemo(
+    () => buildDataHubFieldPickerOrder(businessExtracted.columns, selected?.visibleBusinessFields),
+    [businessExtracted.columns, selected?.visibleBusinessFields],
+  );
 
   const filteredRows = useMemo(
     () => filterBusinessRows(businessExtracted.rows, businessFilterQuery, businessFilterScope),
@@ -499,13 +521,48 @@ export function DataSync() {
     const set = new Set(vis === undefined || vis === null ? all : vis);
     if (checked) set.add(col);
     else set.delete(col);
-    const nextArr = all.filter((c) => set.has(c));
-    if (nextArr.length === all.length) {
+    const order = buildDataHubFieldPickerOrder(all, vis);
+    const nextArr: string[] = [];
+    for (const c of order) {
+      if (set.has(c)) nextArr.push(c);
+    }
+    for (const c of all) {
+      if (set.has(c) && !nextArr.includes(c)) nextArr.push(c);
+    }
+    if (nextArr.length === 0) {
+      updateProfile(selectedId, { visibleBusinessFields: [] });
+    } else if (nextArr.length === all.length && nextArr.every((c, i) => c === all[i])) {
       updateProfile(selectedId, { visibleBusinessFields: undefined });
     } else {
       updateProfile(selectedId, { visibleBusinessFields: nextArr });
     }
   };
+
+  /**
+   * 在「自定义展示字段」中拖拽重排后，按新顺序写回 `visibleBusinessFields`（未勾选列不参与表格列）。
+   */
+  const reorderFieldPickerColumns = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      if (!selectedId || fromIndex === toIndex) return;
+      const all = businessExtracted.columns;
+      if (!all.length) return;
+      const list = [...buildDataHubFieldPickerOrder(all, selected?.visibleBusinessFields)];
+      if (fromIndex < 0 || fromIndex >= list.length || toIndex < 0 || toIndex >= list.length) return;
+      const [moved] = list.splice(fromIndex, 1);
+      list.splice(toIndex, 0, moved);
+      const vis = selected?.visibleBusinessFields;
+      const checkedSet = vis === undefined || vis === null ? new Set(all) : new Set(vis);
+      const newVis = list.filter((c) => all.includes(c) && checkedSet.has(c));
+      if (newVis.length === 0) {
+        updateProfile(selectedId, { visibleBusinessFields: [] });
+      } else if (newVis.length === all.length && newVis.every((c, i) => c === all[i])) {
+        updateProfile(selectedId, { visibleBusinessFields: undefined });
+      } else {
+        updateProfile(selectedId, { visibleBusinessFields: newVis });
+      }
+    },
+    [selectedId, selected?.visibleBusinessFields, businessExtracted.columns, updateProfile],
+  );
 
   const setAllVisible = (allVisible: boolean) => {
     if (!selectedId) return;
@@ -774,6 +831,9 @@ export function DataSync() {
         <>
           <details className="data-sync-field-picker">
             <summary>自定义展示字段（列）</summary>
+            <p className="muted tiny data-sync-field-picker-dnd-hint">
+              拖动左侧「⠿」手柄调整字段顺序，下方「数据view」表格列会同步更新；未勾选的列不会出现在表格中。
+            </p>
             <div className="data-sync-field-picker-actions">
               <button type="button" className="ghost-btn tiny-btn" onClick={() => setAllVisible(true)}>
                 全选列
@@ -782,16 +842,48 @@ export function DataSync() {
                 清空（不展示列后再勾选）
               </button>
             </div>
-            <div className="data-sync-field-checkboxes">
-              {businessExtracted.columns.map((col) => (
-                <label key={col} className="data-sync-field-check-label">
-                  <input
-                    type="checkbox"
-                    checked={colChecked(col)}
-                    onChange={(e) => toggleVisibleField(col, e.target.checked)}
-                  />
-                  <span title={col}>{col}</span>
-                </label>
+            <div className="data-sync-field-checkboxes" role="list" aria-label="自定义展示字段，可拖拽排序">
+              {fieldPickerOrder.map((col, index) => (
+                <div
+                  key={col}
+                  className="data-sync-field-picker-row"
+                  role="listitem"
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const raw =
+                      e.dataTransfer.getData(DATA_HUB_FIELD_DRAG_MIME) ||
+                      e.dataTransfer.getData("text/plain");
+                    const from = parseInt(raw, 10);
+                    if (!Number.isFinite(from)) return;
+                    reorderFieldPickerColumns(from, index);
+                  }}
+                >
+                  <span
+                    className="data-sync-field-drag-handle"
+                    draggable
+                    title="拖动排序"
+                    aria-label={`拖动排序：${col}`}
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData(DATA_HUB_FIELD_DRAG_MIME, String(index));
+                      e.dataTransfer.setData("text/plain", String(index));
+                      e.dataTransfer.effectAllowed = "move";
+                    }}
+                  >
+                    ⠿
+                  </span>
+                  <label className="data-sync-field-check-label">
+                    <input
+                      type="checkbox"
+                      checked={colChecked(col)}
+                      onChange={(e) => toggleVisibleField(col, e.target.checked)}
+                    />
+                    <span title={col}>{col}</span>
+                  </label>
+                </div>
               ))}
             </div>
           </details>
