@@ -70,6 +70,20 @@ export function pickBranchCompany(item: ExtractionHistoryItem): string {
   return "暂无";
 }
 
+/**
+ * 用于视角过滤、范围匹配：优先 JSON「分公司名称」；若为「暂无」则尝试从列表标题
+ * `displayTitle`（格式 `YYYY-MM-DD-分公司名`）解析，避免分公司领导视角下整条历史被误隐藏。
+ */
+export function resolveBranchLabelForHistoryItem(item: ExtractionHistoryItem): string {
+  const p = pickBranchCompany(item);
+  if (p !== "暂无") return p;
+  const t = item.displayTitle?.trim();
+  if (!t) return "暂无";
+  const m = t.match(/^\d{4}-\d{2}-\d{2}-(.+)$/);
+  if (m?.[1]?.trim()) return m[1].trim().replace(/[/\\]/g, "·");
+  return "暂无";
+}
+
 export interface TimelineDateGroup {
   date: string;
   /** 该日期下全部记录（按保存时间降序） */

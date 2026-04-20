@@ -28,6 +28,9 @@ import {
   isBranchCompanyUnit,
   taskVisibleForPerspective,
 } from "../utils/leaderPerspective";
+import { loadExtractionHistory } from "../utils/extractionHistoryStorage";
+import { rebuildReportDynamicMemoryFromHistory } from "../utils/reportDynamicMemory";
+import { syncTaskDynamicMemoryFromTasks } from "../utils/taskDynamicMemory";
 import { buildAutoTaskCode } from "../utils/taskCode";
 import {
   type CurrentUser,
@@ -192,6 +195,14 @@ export function TaskProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
   }, [tasks]);
+
+  useEffect(() => {
+    syncTaskDynamicMemoryFromTasks(tasks);
+  }, [tasks]);
+
+  useEffect(() => {
+    rebuildReportDynamicMemoryFromHistory(loadExtractionHistory());
+  }, []);
 
   const setUser = useCallback((u: CurrentUser) => {
     setUserState(u);

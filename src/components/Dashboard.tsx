@@ -14,6 +14,7 @@ import { isIsoDateString } from "../utils/taskDueDate";
 import { Donut } from "./Donut";
 import { PendingArrangementSection } from "./PendingArrangementSection";
 import { ReportDashboardTab } from "./ReportDashboardTab";
+import { HomeAiChatPanel } from "./HomeAiChatPanel";
 
 function monthKey(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -119,6 +120,11 @@ export function Dashboard() {
   };
 
   return (
+    <div className="home-page-split">
+      <aside className="home-page-split-chat" aria-label="AI 对话">
+        <HomeAiChatPanel />
+      </aside>
+      <div className="home-page-split-main">
     <div className="home-dash">
       <div className="report-main-tabs home-dash-subtabs" role="tablist" aria-label="数据看板分类">
         <button
@@ -367,6 +373,8 @@ export function Dashboard() {
       </aside>
         </div>
       )}
+    </div>
+      </div>
     </div>
   );
 }

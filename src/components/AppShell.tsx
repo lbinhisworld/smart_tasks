@@ -36,7 +36,7 @@ export function AppShell({
   }, [perspectiveOptions, user.perspective, setUser]);
 
   return (
-    <div className="shell">
+    <div className={`shell${active === "board" ? " shell--board-fill" : ""}`}>
       <header className="top-header">
         <div className="brand">
           <div className="logo-mark">齐峰</div>
@@ -134,7 +134,7 @@ export function AppShell({
         </span>
       </div>
 
-      <main className="main-area">{children}</main>
+      <main className={`main-area${active === "board" ? " main-area--home-board" : ""}`}>{children}</main>
     </div>
   );
 }

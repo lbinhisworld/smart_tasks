@@ -192,6 +192,7 @@ export async function callLlmChatJsonObject(
   env: LlmEnv,
   systemContent: string,
   userContent: string,
+  maxCompletionTokens?: number,
 ): Promise<ProductionReportExtractionResult> {
   return postChatCompletion(
     env,
@@ -201,6 +202,7 @@ export async function callLlmChatJsonObject(
     ],
     0.2,
     "json_object",
+    maxCompletionTokens,
   );
 }
 
