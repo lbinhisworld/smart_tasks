@@ -1,5 +1,5 @@
 /**
- * @fileoverview 报告管理页：双 Tab「报告提取」（上传/解析/预览/保存）与「提取历史」（时间线、导入导出）；处理从看板跳转的焦点与高亮并切至历史 Tab。
+ * @fileoverview 报告管理页：双 Tab「报告提取」（上传/解析/预览/保存）与「提取历史」（时间线、导入导出、导出原始报告）；处理从看板跳转的焦点与高亮并切至历史 Tab。
  *
  * **设计要点**
  * - `consumeExtractionFocusFromStorage`：挂载时 `useLayoutEffect` 读一次；另监听 `OPEN_REPORTS_PAGE_EVENT`，在报告页已挂载时也能消费看板「跳转原文」写入的 `sessionStorage`。
@@ -22,6 +22,7 @@ import {
   replaceExtractionHistory,
 } from "../utils/extractionHistoryStorage";
 import { buildTimelineGroups } from "../utils/extractionHistoryGroup";
+import { downloadOriginalReportsJsonFile } from "../utils/downloadOriginalReportsJson";
 import { extractDateFromPlainText } from "../utils/extractDateFromText";
 import { buildExtractionHistoryTitle } from "../utils/extractionHistoryTitle";
 import { formatLlmStatsParts } from "../utils/formatLlmStats";
@@ -344,6 +345,15 @@ export function ReportManagement() {
       </button>
       <button type="button" className="ghost-btn tiny-btn" onClick={() => importHistoryInputRef.current?.click()}>
         导入
+      </button>
+      <button
+        type="button"
+        className="ghost-btn tiny-btn"
+        disabled={visibleHistory.length === 0}
+        onClick={() => downloadOriginalReportsJsonFile(visibleHistory)}
+        title="按「日期、公司、原始报告内容」导出当前视角下全部记录为一个 JSON 文件"
+      >
+        导出原始报告
       </button>
       <input
         ref={importHistoryInputRef}

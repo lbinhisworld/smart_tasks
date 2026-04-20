@@ -7,6 +7,7 @@
  * - `highlightOriginalText` 对 `needle` 做单次 `indexOf` 包裹 `<mark>`（`id` 供滚动到黄标位置）；`needle` 须为原文真实子串（与 `buildQuotedCitationExcerpt` 的 `jumpNeedle` 一致）。
  *
  * - 「引用提取」Tab：展示保存时生成的量化指标与原文 ±50 字引用（见 `buildQuantitativeMetricCitations`）。
+ * - 「导出原始报告」由父级通过 `extraTitleActions` 注入（与「导出/导入」同组，见 `ReportManagement`）。
  *
  * @module ExtractionHistoryList
  */

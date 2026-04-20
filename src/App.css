@@ -2152,6 +2152,8 @@ button.pending-date-to-report:hover {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  flex-shrink: 0;
+  max-width: 100%;
 }
 
 /* 提取历史：按日期时间线 → 分公司 → 记录 */
