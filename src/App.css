@@ -2021,7 +2021,236 @@ button.pending-date-to-report:hover {
 
 .preview-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
+}
+
+/* 报告提取预览：顶栏 + 多任务卡 + 每卡内三步 Tab（箭头色块） */
+.report-preview-global-head {
+  margin-bottom: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.report-preview-global-head-main {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.report-preview-global-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+/* 中台逐条提取：预览标题区进度提示 */
+.hub-global-extract-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #eff6ff, #f0fdf4);
+  border: 1px solid #bfdbfe;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #1e3a5f;
+  animation: hub-global-extract-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes hub-global-extract-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.08);
+  }
+}
+
+.hub-global-extract-spinner {
+  flex-shrink: 0;
+}
+
+.hub-global-extract-text {
+  line-height: 1.4;
+}
+
+/* 中台日报卡片：<details> 折叠与标题行状态 */
+.hub-preview-task-details {
+  margin-top: 14px;
+  border: 1px solid #c8e6c9;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(22, 101, 52, 0.06);
+}
+
+.hub-preview-task-details:first-of-type {
+  margin-top: 10px;
+}
+
+.hub-preview-task-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  list-style: none;
+  cursor: pointer;
+  margin: 0;
+  padding: 10px 14px;
+  background: linear-gradient(90deg, #e8f5e9, #f1f8f4);
+  border-bottom: 1px solid #c8e6c9;
+}
+
+.hub-preview-task-summary::-webkit-details-marker {
+  display: none;
+}
+
+.hub-preview-task-summary::marker {
+  content: "";
+}
+
+.hub-preview-task-status-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.hub-card-head-spinner {
+  flex-shrink: 0;
+}
+
+.hub-card-done-mark {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.hub-card-warn-mark {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.hub-card-extracting-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.hub-card-inline-spinner {
+  flex-shrink: 0;
+}
+
+/* 数据中台：data.list 标准提取表格（解析按钮下方、报告提取预览上方） */
+.hub-daily-standard-wrap {
+  margin-top: 14px;
+  margin-bottom: 0;
+}
+
+.hub-daily-standard-title {
+  margin: 0 0 6px;
+  font-size: 0.98rem;
+}
+
+.hub-daily-standard-hint {
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+
+.hub-daily-standard-hint code {
+  font-size: 0.78em;
+}
+
+.hub-daily-standard-table-wrap {
+  overflow: auto;
+  max-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.hub-daily-standard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.hub-daily-standard-table th,
+.hub-daily-standard-table td {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.hub-daily-standard-table th {
+  background: #f1f5f9;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.hub-daily-standard-content-cell {
+  max-width: 420px;
+}
+
+.hub-daily-content-text {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+.report-preview-task-card {
+  margin-top: 14px;
+  padding: 0;
+  border: 1px solid #c8e6c9;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(22, 101, 52, 0.06);
+}
+
+.report-preview-task-card:first-of-type {
+  margin-top: 10px;
+}
+
+.report-preview-task-card-head {
+  margin: 0;
+  padding: 10px 14px;
+  background: linear-gradient(90deg, #e8f5e9, #f1f8f4);
+  border-bottom: 1px solid #c8e6c9;
+}
+
+.report-preview-task-card-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #14532d;
+  letter-spacing: 0.02em;
+}
+
+/* 预览卡片内仅展示提取结果（无子 Tab） */
+.report-preview-daily-body {
+  padding: 8px 12px 14px;
+  background: #fff;
+  min-height: 48px;
+}
+
+.report-preview-daily-body .preview-body {
+  margin-top: 0;
+}
+
+.report-preview-daily-body .json-fallback {
+  margin: 0;
+  max-height: 360px;
 }
 
 .tiny-btn {
