@@ -14,6 +14,11 @@ export type AssistantPipelinePersisted = {
   steps: PipelineStepPersisted[];
 };
 
+export type AssistantPipelineContextPersisted = {
+  isReport?: boolean;
+  pipelineKind?: "inquiry" | "operation";
+};
+
 export type SkillReviseStatusPersisted = "running" | "done" | "error";
 
 export type SkillReviseBubblePersisted = {
@@ -27,7 +32,11 @@ export type SkillReviseBubblePersisted = {
 export type StoredChatMessage =
   | { role: "user"; text: string }
   | { role: "assistant"; text: string }
-  | { role: "assistant"; pipeline: AssistantPipelinePersisted; pipelineContext?: { isReport: boolean } }
+  | {
+      role: "assistant";
+      pipeline: AssistantPipelinePersisted;
+      pipelineContext?: AssistantPipelineContextPersisted;
+    }
   | { role: "assistant"; skillRevise: SkillReviseBubblePersisted };
 
 const CHAT_STORAGE_KEY = "qifeng_home_ai_chat_messages_v1";
@@ -70,8 +79,13 @@ function parseMessage(raw: unknown): StoredChatMessage | null {
     }
     if (steps.length === 0) return null;
     const ctx = raw.pipelineContext;
-    const pipelineContext =
-      isRecord(ctx) && typeof ctx.isReport === "boolean" ? { isReport: ctx.isReport } : undefined;
+    let pipelineContext: AssistantPipelineContextPersisted | undefined;
+    if (isRecord(ctx)) {
+      const pr: AssistantPipelineContextPersisted = {};
+      if (typeof ctx.isReport === "boolean") pr.isReport = ctx.isReport;
+      if (ctx.pipelineKind === "inquiry" || ctx.pipelineKind === "operation") pr.pipelineKind = ctx.pipelineKind;
+      if (Object.keys(pr).length) pipelineContext = pr;
+    }
     return { role: "assistant", pipeline: { steps }, pipelineContext };
   }
   const text = typeof raw.text === "string" ? raw.text : "";

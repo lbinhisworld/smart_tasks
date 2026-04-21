@@ -91,6 +91,16 @@
 
 - 说明 **四动作流水线**；报告主题下第 4 步为第 3 步答复的展示，任务主题为「数据行 JSON → 第四次模型调用」。
 
+### 3.6 交互类型：操作（`operation`）
+
+- **触发**：意图判断（动作 1）输出 `interaction_mode: "operation"`（见 `docs/ai_chat_skill.md` · 意图判断）。
+- **权威来源**：`docs/核心记忆模块.md` · **「主要操作描述」**（模块主题、所需输入、操作路径各环节之触发条件 / 操作按钮 / 过程反馈）。助手须将用户诉求**落位**到已文档化的 **### 操作：…**（当前含「输入报告」「手工新建任务」等），不得编造未文档化流程。
+- **调试模式流水线**：三步——**意图判断** → **确认操作及范围** → **行操作执行**（替换原四步询问流水线）。
+- **用户模式**：流式阶段同上；最终答复由确认摘要、行操作 `rationale` 与已派发令牌摘要拼接而成（见 `homeAiUserModePipeline.ts`）。
+- **执行边界**：应用壳层对四页路由**同时挂载、以 `display` 切换可见**（`App.tsx`），以便在**数据看板**使用 AI 助手时，后台仍可驱动报告/任务逻辑。`ASSISTANT_UI_ACTION_EVENT` 处理中 **`navigate_*` 不调用 `setPage`**，避免整页跳转。令牌能力见 `assistantUiActions.ts`：`focus_report_extraction`、`parse_report`（等同「解析」，会先清空提取预览再跑解析）、`open_task_manual_new` 等。文档要求但**尚无令牌**的步骤须在 `rationale` 中按核心记忆引导用户到报告管理内点击。
+- **客户端纠正**：`homeAssistantPrompt.ts` 中 `coerceOperationModeForReportIntake` 在路由解析后执行：当用户话语文面为**录入/新建日报**而非**请教或统计**时，将误输出的 `inquiry` + 报告相关主题强制改为 `operation` + `report_management`，避免进入报告问答链路并编造整份日报。
+- **调试模式展示**：操作路径下三步（意图判断、确认操作及范围、行操作执行）均在结果区展示**解析摘要** + **【模型返回原文】**（过长截断）；每步在完成状态下提供 **「优化」** 按钮，映射至 `intent` / `operation_confirm` / `operation_execute` 技能（`pipelineContext.pipelineKind === "operation"`）。
+
 ---
 
 ## 4. 大模型调用设计
@@ -106,10 +116,14 @@
 
 ### 4.2 常驻系统知识与动态记忆（何时注入）
 
-- **动作 1**：仅 **核心记忆**（`buildTopicRouterSystemPrompt`）。  
-- **动作 2**：**报告**用 `buildDataScopeSystemPromptForReport`（`report_dates` / `branch_companies`）；**非报告**用 `buildDataScopeSystemPrompt`（`scope_description`）。  
-- **动作 3**：**报告**用 `buildReportDataRecordSystemPrompt` + user 含 **形态说明常量**与 **视角内筛选后的结构化 JSON**（`filterExtractionHistoryByReportScope` + `extractionHistoryVisibleForPerspective`）；**非报告**仍用双动态记忆 + `parseDataRecordJson`。  
-- **动作 4**：仅 **非报告** 调用 `buildFinalDataAnswerSystemPrompt`；报告路径跳过。
+- **动作 1（意图判断）**：**核心记忆**全文（`resolveTopicRouterSystemPrompt`）；输出含 `interaction_mode` + `topic`。  
+- **若为 `inquiry`（询问）**  
+  - **动作 2**：**报告**用 `buildDataScopeSystemPromptForReport`；**非报告**用 `buildDataScopeSystemPrompt`。  
+  - **动作 3**：**报告**用 `buildReportDataRecordSystemPrompt` + 形态说明 + 结构化 JSON；**非报告**用双动态记忆 + `parseDataRecordJson`。  
+  - **动作 4**：仅 **非报告** `buildFinalDataAnswerSystemPrompt`；报告路径跳过第四次调用。  
+- **若为 `operation`（操作）**  
+  - **动作 2（确认）**：`buildOperationConfirmSystemPrompt` / `buildOperationConfirmUserPayload`——system 再次注入 **核心记忆**，模型须对齐 **「主要操作描述」** 输出 `module` / `operation` / `operation_info` / `user_facing_summary`（`parseOperationConfirmJson`）。  
+  - **动作 3（行操作）**：`buildOperationExecuteSystemPrompt` / `buildOperationExecuteUserPayload`——system 仍含 **核心记忆**，结合上一步 JSON 输出 `ui_action_tokens` + `rationale`（`parseOperationExecuteJson`），随后 `runAssistantOperationUiActions` 派发受控事件（见 §3.6）。
 
 ### 4.3 调用接口
 
@@ -119,10 +133,14 @@
 
 ### 4.4 响应处理
 
-- **动作 1**：`parseTopicRouterJson`；失败用 `ROUTER_FALLBACK`。  
-- **动作 2**：**报告** `parseDataScopeReportJson`；**非报告** `parseDataScopeJson`。  
-- **动作 3**：**报告** `parseReportDataRecordJudgmentJson`（`record_set_summary` + `answer`）；**非报告** `parseDataRecordJson` + 本机过滤行。  
-- **动作 4**：仅 **非报告**：`parseFinalAnswerJson`；**报告**：使用动作 3 的 `answer` 字段。  
+- **动作 1**：`parseTopicRouterJson`（含 `interaction_mode`）；失败用 `ROUTER_FALLBACK`。  
+- **`inquiry` 分支**  
+  - **动作 2**：**报告** `parseDataScopeReportJson`；**非报告** `parseDataScopeJson`。  
+  - **动作 3**：**报告** `parseReportDataRecordJudgmentJson`；**非报告** `parseDataRecordJson` + 本机过滤行。  
+  - **动作 4**：仅 **非报告** `parseFinalAnswerJson`；**报告**使用动作 3 的 `answer`。  
+- **`operation` 分支**  
+  - **动作 2**：`parseOperationConfirmJson`（失败时用占位确认对象，避免中断）。  
+  - **动作 3**：`parseOperationExecuteJson` + `runAssistantOperationUiActions`（仅映射已知令牌）。  
 - **异常**：将当前 `running` 步标为 `error`，后续步保持 `waiting`。
 
 ---
@@ -132,7 +150,7 @@
 | 能力 | 用途 | 与聊天的关系 |
 |------|------|----------------|
 | `callProductionReportExtraction` | 日报结构化 JSON | 独立；聊天不使用 |
-| `callLlmChatJsonObject` | 通用 JSON 对象输出 | **聊天使用**（报告主题 **3 次** / 其它 **4 次**） |
+| `callLlmChatJsonObject` | 通用 JSON 对象输出 | **聊天使用**：`inquiry` 时报告主题 **3 次** / 其它 **4 次**；`operation` 时 **3 次**（意图 + 确认 + 行操作） |
 | `callLlmChatText` | 自由文本 | 报告/数据中台等其它功能使用 |
 | `readLlmEnv` | 统一解析 Key / URL / model | **共享** |
 

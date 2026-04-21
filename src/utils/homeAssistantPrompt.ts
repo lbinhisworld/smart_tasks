@@ -7,19 +7,210 @@ import {
   resolveDataScopeGeneralSystemPrompt,
   resolveDataScopeReportSystemPrompt,
   resolveFinalDataAnswerSystemPrompt,
+  resolveOperationConfirmSystemPrompt,
+  resolveOperationExecuteSystemPrompt,
   resolveReportDataRecordSystemPrompt,
   resolveTopicRouterSystemPrompt,
 } from "./aiChatSkillStore";
+import {
+  getAssistantHistoryForRouter,
+  inferTopicFromHistoryMarkdown,
+  intentTopicSwitchedFromPrior,
+} from "./assistantHistoryMd";
+import {
+  ASSISTANT_UI_ACTION_TOKENS_HELP,
+  dispatchAssistantUiActions,
+  mapUiActionTokens,
+} from "./assistantUiActions";
 
 export { getBundledCoreMemoryText, getCoreMemoryText, setCoreMemoryText } from "./coreMemoryStorage";
 
-/** 路由判定：报告管理 / 任务管理 / 综合 */
-export type AssistantTopic = "report_management" | "task_management" | "general";
+/** 询问：走数据检索流水线；操作：走确认 + 行动作 */
+export type InteractionMode = "inquiry" | "operation";
+
+/** 路由判定：数据看板 / 报告管理 / 任务管理 / 综合 */
+export type AssistantTopic = "dashboard" | "report_management" | "task_management" | "general";
 
 export type TopicRouterResult = {
+  interaction_mode: InteractionMode;
   topic: AssistantTopic;
   topic_rationale: string;
 };
+
+export type OperationConfirmResult = {
+  module: AssistantTopic;
+  operation: string;
+  operation_info: Record<string, unknown>;
+  user_facing_summary: string;
+};
+
+/** 与核心记忆「日报正文」一致：短于该长度视为尚未提供有效正文 */
+export const DAILY_REPORT_BODY_MIN_LEN = 20;
+
+export function getDailyReportBodyFromOperationInfo(info: Record<string, unknown>): string {
+  const keys = ["daily_report_body", "日报正文", "report_body", "body"] as const;
+  for (const k of keys) {
+    const v = info[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+/** 同一轮用户消息中，命令行后的多行正文 */
+export function tryExtractDailyReportBodyFromUserTurn(userText: string): string | null {
+  const t = userText.trim();
+  if (!t) return null;
+  const lines = t.split(/\r?\n/);
+  if (lines.length >= 2) {
+    const first = lines[0].trim();
+    if (
+      /^(新建|录入|上传|提交)?日报$/i.test(first) ||
+      /^输入报告$/i.test(first) ||
+      /^(我要|请|帮忙)?(新建|录入|上传|提交|写|填).{0,6}日报$/i.test(first)
+    ) {
+      const rest = lines.slice(1).join("\n").trim();
+      if (rest.length >= DAILY_REPORT_BODY_MIN_LEN) return rest;
+    }
+  }
+  const m = t.match(/(?:^|[\n])(?:新建|录入|上传|提交)?日报\s*[:：]?\s*\n([\s\S]+)$/i);
+  if (m && m[1].trim().length >= DAILY_REPORT_BODY_MIN_LEN) return m[1].trim();
+  return null;
+}
+
+export function isReportManagementIntakeOperation(confirm: OperationConfirmResult): boolean {
+  if (confirm.module !== "report_management") return false;
+  const op = confirm.operation.replace(/\s/g, "");
+  return /输入报告|新建日报|录入日报|上传日报|提交日报|日报录入|录日报/.test(op);
+}
+
+/** 合并模型输出与同一轮用户正文；缺正文时强制补充「请提供日报原文」 */
+export function normalizeReportIntakeConfirm(
+  confirm: OperationConfirmResult,
+  userText: string,
+): OperationConfirmResult {
+  if (!isReportManagementIntakeOperation(confirm)) return confirm;
+  const opInfo: Record<string, unknown> = { ...confirm.operation_info };
+  if (getDailyReportBodyFromOperationInfo(opInfo).length >= DAILY_REPORT_BODY_MIN_LEN) {
+    return { ...confirm, operation_info: opInfo };
+  }
+  const inline = tryExtractDailyReportBodyFromUserTurn(userText);
+  if (inline) opInfo.daily_report_body = inline;
+  let summary = confirm.user_facing_summary.trim();
+  if (getDailyReportBodyFromOperationInfo(opInfo).length < DAILY_REPORT_BODY_MIN_LEN) {
+    if (!summary.includes("请提供日报原文")) {
+      summary = `请提供日报原文。\n\n${summary}`.trim();
+    }
+  }
+  return { ...confirm, operation_info: opInfo, user_facing_summary: summary };
+}
+
+/** 是否需在聊天区下一轮收集日报正文（核心记忆 1.2） */
+export function shouldAwaitDailyReportBodyInChat(confirm: OperationConfirmResult): boolean {
+  if (!isReportManagementIntakeOperation(confirm)) return false;
+  return getDailyReportBodyFromOperationInfo(confirm.operation_info).length < DAILY_REPORT_BODY_MIN_LEN;
+}
+
+export type OperationExecuteResult = {
+  ui_action_tokens: string[];
+  rationale: string;
+};
+
+/**
+ * 模型常把「新建/录入日报」误判为 inquiry，进而走报告问答并编造日报正文。
+ * 在用户明显是**录入动作**且非**请教/统计类**问句时，强制改为 operation + 报告管理。
+ */
+export function coerceOperationModeForReportIntake(router: TopicRouterResult, userText: string): TopicRouterResult {
+  if (router.interaction_mode === "operation") return router;
+  const q = userText.trim();
+  if (!q) return router;
+
+  const intakeCue =
+    /新建日报|录入日报|上传日报|提交日报|录日报|记日报|贴日报|粘贴日报|我要(?:录|传|提交|新建|写一份|填).*日报|写(?:一份|个)日报(?!怎么|如何|怎样)|打开(?:报告|日报).*提取|去报告管理.*(?:录|新建|上传|提交)|进报告管理.*(?:录|新建|日报)|报告管理.*(?:录入|新建|上传)(?:日报)?/i.test(
+      q,
+    );
+  const inquiryAboutReport =
+    /怎么|如何|怎样|什么是|为何|为什么|是否|介绍|说明|流程|步骤|模板|范例|要求|规范|标准|格式|注意|统计|查询|对比|分析|列出|汇总|检索|有多少|哪些|查看.*历史|提取历史|KPI|产量|指标|完成情况/i.test(
+      q,
+    );
+
+  if (!intakeCue || inquiryAboutReport) return router;
+
+  if (
+    router.topic !== "report_management" &&
+    router.topic !== "general" &&
+    router.topic !== "dashboard"
+  ) {
+    return router;
+  }
+
+  return {
+    interaction_mode: "operation",
+    topic: "report_management",
+    topic_rationale: `${router.topic_rationale}（系统规则：识别为日报录入/新建类操作意图，已从「询问」纠正为「操作」，须按核心记忆「主要操作描述·输入报告」引导，不得生成模拟日报全文。）`,
+  };
+}
+
+/**
+ * 模型常把「新建/创建任务」误判为 inquiry。在用户明显是**打开新建表单**而非**请教规则或统计**时，强制改为 operation + 任务管理。
+ */
+export function coerceOperationModeForTaskManualNew(router: TopicRouterResult, userText: string): TopicRouterResult {
+  if (router.interaction_mode === "operation") return router;
+  const q = userText.trim();
+  if (!q) return router;
+
+  const taskNewCue =
+    /^手工新建任务[。.!！\s]*$/i.test(q) ||
+    /^新建任务[。.!！\s]*$/i.test(q) ||
+    /^创建任务[。.!！\s]*$/i.test(q) ||
+    /(?:我要|帮我|请)(?:你)?(?:手工)?(?:新建|创建)(?:一条)?任务/i.test(q) ||
+    /打开(?:手工)?新建任务|进入(?:手工)?新建任务/i.test(q) ||
+    /任务管理.*(?:手工)?(?:新建|创建)(?:一条)?任务/i.test(q);
+
+  const inquiryHeavy =
+    /怎么|如何|怎样|什么是|为何|为什么|是否|介绍|说明|流程|步骤|模板|范例|要求|规范|统计|查询|对比|分析|列出|汇总|检索|有多少|哪些|QF-[A-Z]{2}/i.test(
+      q,
+    );
+
+  if (!taskNewCue || inquiryHeavy) return router;
+
+  if (
+    router.topic !== "task_management" &&
+    router.topic !== "general" &&
+    router.topic !== "dashboard"
+  ) {
+    return router;
+  }
+
+  return {
+    interaction_mode: "operation",
+    topic: "task_management",
+    topic_rationale: `${router.topic_rationale}（系统规则：识别为手工新建任务类操作意图，已从「询问」纠正为「操作」，须按核心记忆「主要操作描述·手工新建任务」派发 open_task_manual_new。）`,
+  };
+}
+
+/** 多轮语境下仅在「询问 + topic=general」时延续 history 主题 */
+export function applyInquiryTopicHistoryFallback(router: TopicRouterResult, userText: string): TopicRouterResult {
+  if (router.interaction_mode !== "inquiry" || router.topic !== "general") return router;
+  const inferred = inferTopicFromHistoryMarkdown(getAssistantHistoryForRouter());
+  if (
+    inferred &&
+    (inferred === "report_management" || inferred === "task_management" || inferred === "dashboard") &&
+    !intentTopicSwitchedFromPrior(userText, router.topic_rationale, inferred)
+  ) {
+    const topic: AssistantTopic =
+      inferred === "report_management"
+        ? "report_management"
+        : inferred === "task_management"
+          ? "task_management"
+          : "dashboard";
+    return {
+      ...router,
+      topic,
+      topic_rationale: `${router.topic_rationale}（多轮语境：根据 history.md 中近期主题线索延续为「${topicChineseLabel(topic)}」。）`,
+    };
+  }
+  return router;
+}
 
 export type DataScopeResult = {
   scope_description: string;
@@ -52,18 +243,38 @@ export function parseTopicRouterJson(raw: string): TopicRouterResult | null {
     const topic_rationale =
       typeof o.topic_rationale === "string" ? o.topic_rationale.trim() : "";
     if (!topic_rationale) return null;
-    return { topic, topic_rationale };
+    const interaction_mode = normalizeInteractionMode(o.interaction_mode);
+    return { interaction_mode, topic, topic_rationale };
   } catch {
     return null;
   }
 }
 
+function normalizeInteractionMode(v: unknown): InteractionMode {
+  if (v === "operation" || v === "inquiry") return v;
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (s === "询问") return "inquiry";
+    if (s === "操作") return "operation";
+  }
+  return "inquiry";
+}
+
 function normalizeTopic(v: unknown): AssistantTopic {
-  if (v === "report_management" || v === "task_management" || v === "general") return v;
+  if (
+    v === "dashboard" ||
+    v === "report_management" ||
+    v === "task_management" ||
+    v === "general"
+  ) {
+    return v;
+  }
   if (typeof v === "string") {
     const s = v.trim().toLowerCase();
     if (s === "report" || s.includes("报告")) return "report_management";
     if (s === "task" || s.includes("任务管理")) return "task_management";
+    if (s.includes("数据看板") || s.includes("首页看板") || s === "board" || s.includes("dashboard"))
+      return "dashboard";
     if (s.includes("综合") || s.includes("general")) return "general";
   }
   return "general";
@@ -71,6 +282,8 @@ function normalizeTopic(v: unknown): AssistantTopic {
 
 export function topicChineseLabel(topic: AssistantTopic): string {
   switch (topic) {
+    case "dashboard":
+      return "数据看板";
     case "report_management":
       return "报告管理";
     case "task_management":
@@ -83,8 +296,88 @@ export function topicChineseLabel(topic: AssistantTopic): string {
 }
 
 export function formatTopicBlock(router: TopicRouterResult): string {
-  return `主题枚举：${router.topic}（${topicChineseLabel(router.topic)}）
+  return `交互类型：${router.interaction_mode}（${router.interaction_mode === "inquiry" ? "询问" : "操作"}）
+主题枚举：${router.topic}（${topicChineseLabel(router.topic)}）
 判定说明：${router.topic_rationale}`;
+}
+
+export function buildOperationConfirmSystemPrompt(): string {
+  return resolveOperationConfirmSystemPrompt();
+}
+
+export function buildOperationConfirmUserPayload(question: string, topicBlock: string): string {
+  return `【主题判断结果】
+${topicBlock}
+
+【用户原话】
+${question.trim()}`;
+}
+
+export function parseOperationConfirmJson(raw: string): OperationConfirmResult | null {
+  try {
+    const o = JSON.parse(raw.trim()) as Record<string, unknown>;
+    const module = normalizeTopic(o.module);
+    const operation = typeof o.operation === "string" ? o.operation.trim() : "";
+    const user_facing_summary =
+      typeof o.user_facing_summary === "string" ? o.user_facing_summary.trim() : "";
+    let operation_info: Record<string, unknown> = {};
+    const oi = o.operation_info;
+    if (oi && typeof oi === "object" && !Array.isArray(oi)) operation_info = oi as Record<string, unknown>;
+    if (!operation && !user_facing_summary) return null;
+    return {
+      module,
+      operation: operation || "（未命名操作）",
+      operation_info,
+      user_facing_summary: user_facing_summary || "（无摘要）",
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function buildOperationExecuteSystemPrompt(): string {
+  return resolveOperationExecuteSystemPrompt();
+}
+
+export function buildOperationExecuteUserPayload(
+  question: string,
+  topicBlock: string,
+  confirmJson: string,
+): string {
+  return `${ASSISTANT_UI_ACTION_TOKENS_HELP}
+
+【主题判断结果】
+${topicBlock}
+
+【确认操作及范围 · JSON】
+${confirmJson.trim()}
+
+【用户原话】
+${question.trim()}`;
+}
+
+export function parseOperationExecuteJson(raw: string): OperationExecuteResult | null {
+  try {
+    const o = JSON.parse(raw.trim()) as Record<string, unknown>;
+    const tok = o.ui_action_tokens;
+    const rationale = typeof o.rationale === "string" ? o.rationale.trim() : "";
+    const ui_action_tokens = Array.isArray(tok)
+      ? tok.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean)
+      : [];
+    if (!rationale && ui_action_tokens.length === 0) return null;
+    return { ui_action_tokens, rationale: rationale || "（无说明）" };
+  } catch {
+    return null;
+  }
+}
+
+/** 解析并派发受控 UI 动作；返回已执行令牌（过滤后） */
+export function runAssistantOperationUiActions(rawExecuteJson: string): string[] {
+  const parsed = parseOperationExecuteJson(rawExecuteJson);
+  const tokens = parsed?.ui_action_tokens ?? [];
+  const actions = mapUiActionTokens(tokens);
+  if (actions.length) dispatchAssistantUiActions(actions);
+  return tokens;
 }
 
 // --- ② 数据范围判断（用户输入 + 主题结果）---
@@ -319,9 +612,24 @@ export function inferOfflineTopic(question: string): AssistantTopic {
   if (reportHit && !taskHit) return "report_management";
   if (taskHit && !reportHit) return "task_management";
   if (reportHit && taskHit) return "general";
+  if (/数据看板|首页看板/.test(s)) return "dashboard";
   if (/看板|风险|关注|环形|当前视角|总览|逾期|节点/.test(s)) return "general";
   if (/同步|数据中台|清洗|接口/.test(s)) return "general";
   return "general";
+}
+
+/** 离线：无模型时粗分询问 / 操作 */
+export function inferOfflineInteractionMode(question: string): InteractionMode {
+  const s = question.trim();
+  if (!s) return "inquiry";
+  if (
+    /手工新建|新建任务|新建日报|创建任务|去任务管理|去报告|打开任务|打开报告|切换(到)?(任务|报告|看板|首页|数据中台)|跳转(到)?(任务|报告)|进入(任务|报告|看板)|帮我打开|点.*新建/i.test(
+      s,
+    )
+  ) {
+    return "operation";
+  }
+  return "inquiry";
 }
 
 export function inferOfflineIntentSummary(question: string): string {

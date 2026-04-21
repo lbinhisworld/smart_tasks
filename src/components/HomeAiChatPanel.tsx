@@ -14,6 +14,20 @@ import {
   tasksToLlmRows,
 } from "../utils/homeAssistantDataRows";
 import {
+  ASSISTANT_REPORT_CHAIN_DONE_EVENT,
+  ASSISTANT_REPORT_PARSE_RESULT_EVENT,
+  dispatchAssistantReportParse,
+  dispatchAssistantSetReportManualText,
+  dispatchAssistantUiActions,
+  type AssistantReportChainDoneDetail,
+  type AssistantReportParseResultDetail,
+} from "../utils/assistantUiActions";
+import {
+  applyInquiryTopicHistoryFallback,
+  coerceOperationModeForReportIntake,
+  coerceOperationModeForTaskManualNew,
+  DAILY_REPORT_BODY_MIN_LEN,
+  getDailyReportBodyFromOperationInfo,
   buildDataRecordSystemPrompt,
   buildDataRecordUserPayload,
   buildDataScopeSystemPrompt,
@@ -21,6 +35,10 @@ import {
   buildDataScopeUserPayload,
   buildFinalDataAnswerSystemPrompt,
   buildFinalDataAnswerUserPayload,
+  buildOperationConfirmSystemPrompt,
+  buildOperationConfirmUserPayload,
+  buildOperationExecuteSystemPrompt,
+  buildOperationExecuteUserPayload,
   buildReportDataRecordSystemPrompt,
   buildReportDataRecordUserPayload,
   buildTopicRouterSystemPrompt,
@@ -29,13 +47,19 @@ import {
   formatReportDataScopeFeedback,
   formatTopicBlock,
   inferOfflineIntentSummary,
+  inferOfflineInteractionMode,
   inferOfflineTopic,
   parseDataRecordJson,
   parseDataScopeJson,
   parseDataScopeReportJson,
   parseFinalAnswerJson,
+  normalizeReportIntakeConfirm,
+  parseOperationConfirmJson,
+  parseOperationExecuteJson,
   parseReportDataRecordJudgmentJson,
   parseTopicRouterJson,
+  runAssistantOperationUiActions,
+  shouldAwaitDailyReportBodyInChat,
   topicChineseLabel,
   type ReportDataScopeResult,
   type TopicRouterResult,
@@ -44,18 +68,14 @@ import { buildReportStructuredArrayForLlm } from "../utils/homeAssistantReportPa
 import { callLlmChatJsonObject, readLlmEnv } from "../utils/llmExtract";
 import { nextRevealEnd, rollingThreeSubtitleLines, sleepMs } from "../utils/userModeStreamDisplay";
 import { extractionHistoryVisibleForPerspective } from "../utils/leaderPerspective";
-import {
-  appendAssistantHistoryTurn,
-  getAssistantHistoryForRouter,
-  inferTopicFromHistoryMarkdown,
-  intentTopicSwitchedFromPrior,
-} from "../utils/assistantHistoryMd";
-import { skillKeyForPipelineStep } from "../utils/aiChatSkillStore";
+import { appendAssistantHistoryTurn } from "../utils/assistantHistoryMd";
+import { skillKeyForOperationPipelineStep, skillKeyForPipelineStep } from "../utils/aiChatSkillStore";
 import { reviseSkillPromptWithFeedback } from "../utils/aiChatSkillRevision";
 import {
   loadStoredChatMessages,
   normalizeStoredMessages,
   saveStoredChatMessages,
+  type AssistantPipelineContextPersisted,
   type AssistantPipelinePersisted as AssistantPipeline,
   type StoredChatMessage as ChatMessage,
 } from "../utils/homeAiChatPersistence";
@@ -79,6 +99,7 @@ type UserModeLiveState = {
 };
 
 const ROUTER_FALLBACK: TopicRouterResult = {
+  interaction_mode: "inquiry",
   topic: "general",
   topic_rationale: "未能解析主题路由结果，已按「综合或其它」处理。",
 };
@@ -86,6 +107,18 @@ const ROUTER_FALLBACK: TopicRouterResult = {
 function buildAssistantWelcome(perspective: string): string {
   const p = perspective.trim() || "用户";
   return `尊敬的【${p}】，欢迎使用齐峰新材重点任务管理系统。`;
+}
+
+/** 调试模式：环节反馈区附加模型原文时的最大长度 */
+const DEBUG_PIPELINE_RAW_RETURN_MAX_CHARS = 14_000;
+
+function appendDebugModelRawReturn(summary: string, rawContent: string): string {
+  const raw = rawContent.trim() || "（空）";
+  const clipped =
+    raw.length > DEBUG_PIPELINE_RAW_RETURN_MAX_CHARS
+      ? `${raw.slice(0, DEBUG_PIPELINE_RAW_RETURN_MAX_CHARS)}\n…（已截断，完整内容以网络响应为准）`
+      : raw;
+  return `${summary}\n\n【模型返回原文】\n${clipped}`;
 }
 
 function createInitialPipeline(): AssistantPipeline {
@@ -107,12 +140,15 @@ function patchLastPipeline(messages: ChatMessage[], fn: (p: AssistantPipeline) =
   return [...messages.slice(0, last), { ...tail, pipeline: fn(tail.pipeline) }];
 }
 
-function patchLastPipelineWithContext(messages: ChatMessage[], isReport: boolean): ChatMessage[] {
+function patchLastPipelineWithContext(
+  messages: ChatMessage[],
+  ctx: AssistantPipelineContextPersisted,
+): ChatMessage[] {
   const last = messages.length - 1;
   if (last < 0) return messages;
   const tail = messages[last];
   if (tail.role !== "assistant" || !("pipeline" in tail)) return messages;
-  return [...messages.slice(0, last), { ...tail, pipelineContext: { isReport } }];
+  return [...messages.slice(0, last), { ...tail, pipelineContext: ctx }];
 }
 
 function SkillReviseBubbleLine({
@@ -171,8 +207,12 @@ function AssistantPipelineBlock({
   onOptimizeStep,
 }: {
   pipeline: AssistantPipeline;
-  pipelineContext?: { isReport: boolean };
-  onOptimizeStep?: (stepIndex: number, stepActionName: string, ctx?: { isReport: boolean }) => void;
+  pipelineContext?: AssistantPipelineContextPersisted;
+  onOptimizeStep?: (
+    stepIndex: number,
+    stepActionName: string,
+    ctx?: AssistantPipelineContextPersisted,
+  ) => void;
 }) {
   return (
     <div className="home-ai-pipeline" role="region" aria-label="查询流水线">
@@ -262,6 +302,8 @@ export function HomeAiChatPanel() {
   const [userModeLive, setUserModeLive] = useState<UserModeLiveState | null>(null);
   const [streamReveal, setStreamReveal] = useState<{ full: string; shown: string } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  /** 上一轮操作路径已提示「请提供日报原文」，下一轮用户发送视为日报正文 */
+  const awaitingReportBodyFromChatRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -272,9 +314,11 @@ export function HomeAiChatPanel() {
   }, [assistantUiMode]);
 
   const handleOptimizeStep = useCallback(
-    (stepIndex: number, stepActionName: string, ctx?: { isReport: boolean }) => {
-      const isReport = ctx?.isReport ?? false;
-      const mapped = skillKeyForPipelineStep(stepIndex, isReport);
+    (stepIndex: number, stepActionName: string, ctx?: AssistantPipelineContextPersisted) => {
+      const mapped =
+        ctx?.pipelineKind === "operation"
+          ? skillKeyForOperationPipelineStep(stepIndex)
+          : skillKeyForPipelineStep(stepIndex, ctx?.isReport ?? false);
       if (!mapped) return;
       optimizeTargetRef.current = {
         skillKey: mapped.key,
@@ -311,9 +355,143 @@ export function HomeAiChatPanel() {
     });
   }, [user.perspective]);
 
+  useEffect(() => {
+    const onParseResult = (ev: Event) => {
+      const d = (ev as CustomEvent<AssistantReportParseResultDetail>).detail;
+      if (!d) return;
+      if (d.ok) {
+        const bodyText = d.summaryLine
+          ? d.summaryLine
+          : [
+              "**环节 1：解析原文**已完成（已由助手按《核心记忆》自动触发，等同点击「解析」）。",
+              "",
+              `- **提取日期**：${d.extractionDate || "—"}`,
+              `- **分公司名称**：${d.companyName || "—"}`,
+              "",
+              "结构化结果已载入 **报告管理 → 报告提取 → 报告内容提取** 预览区。",
+              ...(d.willChainCoreMemory
+                ? [
+                    "",
+                    "系统将**自动顺序执行**《核心记忆》**环节 2：更新现有任务进度**与**环节 3：按日报计划生成新任务**（无需您在界面再次点击）；全部完成后会再推送一条执行摘要。",
+                  ]
+                : []),
+            ].join("\n");
+        setMessages((m) => [...m, { role: "assistant", text: bodyText }]);
+      } else {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "assistant",
+            text: `**自动解析未完成**：${d.error || "未知错误"}\n\n可检查大模型配置后重试，或在报告管理手动点击「解析」。`,
+          },
+        ]);
+      }
+    };
+    window.addEventListener(ASSISTANT_REPORT_PARSE_RESULT_EVENT, onParseResult);
+    return () => window.removeEventListener(ASSISTANT_REPORT_PARSE_RESULT_EVENT, onParseResult);
+  }, []);
+
+  useEffect(() => {
+    const skipLabel = (code: string | null) => {
+      if (!code) return "";
+      const map: Record<string, string> = {
+        no_env: "未配置大模型",
+        no_slices: "无分公司日报切片或当前视角下无待更新的未完成任务",
+        no_contexts: "未解析到可拆解的日报计划摘录",
+        phase: "报告未处于可生成状态",
+      };
+      return map[code] ?? code;
+    };
+    const onChainDone = (ev: Event) => {
+      const d = (ev as CustomEvent<AssistantReportChainDoneDetail>).detail;
+      if (!d) return;
+      if (d.chainError) {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "assistant",
+            text: `**自动串联环节 2/3 异常**：${d.chainError}\n\n可在报告管理 **报告提取** 区手动点击「更新现有任务进度」「按日报计划生成新任务」重试。`,
+          },
+        ]);
+        return;
+      }
+      const p2 =
+        d.progressUpdated > 0
+          ? `已根据日报更新 **${d.progressUpdated}** 条任务的进展时间线（及状态/指示等推断结果，以任务详情为准）。`
+          : d.progressSkipped
+            ? `环节 2 已跳过（${skipLabel(d.progressSkipped)}）。`
+            : "环节 2 未写入新的任务进展。";
+      const p3 =
+        d.planGenerated > 0
+          ? `已按日报计划 **生成 ${d.planGenerated} 条**新任务草稿（已写入任务列表，编号以界面为准）。`
+          : d.planSkipped
+            ? `环节 3 已跳过（${skipLabel(d.planSkipped)}）。`
+            : "环节 3 未生成新任务。";
+      const bodyText = [
+        "**环节 2、3 已按《核心记忆》自动顺序执行完毕**（无需等待您点击对应按钮）。",
+        "",
+        `- ${p2}`,
+        `- ${p3}`,
+        "",
+        "详细卡片与错误行见 **报告管理 → 报告提取** 下方侧栏；任务明细见 **任务管理**。",
+      ].join("\n");
+      setMessages((m) => [...m, { role: "assistant", text: bodyText }]);
+    };
+    window.addEventListener(ASSISTANT_REPORT_CHAIN_DONE_EVENT, onChainDone);
+    return () => window.removeEventListener(ASSISTANT_REPORT_CHAIN_DONE_EVENT, onChainDone);
+  }, []);
+
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || busy) return;
+
+    if (awaitingReportBodyFromChatRef.current && !optimizeTargetRef.current) {
+      setInput("");
+      setMessages((m) => [...m, { role: "user", text }]);
+      setBusy(true);
+      try {
+        dispatchAssistantSetReportManualText(text);
+        dispatchAssistantReportParse({
+          sourceText: text,
+          assistantChatFollowup: true,
+          chainCoreMemorySteps: true,
+        });
+        awaitingReportBodyFromChatRef.current = false;
+        const reply =
+          "已根据《核心记忆》将您发送的内容写入**报告管理 → 报告提取 → 日报正文**，并已**自动执行环节 1：解析原文**。随后将**自动顺序执行环节 2（更新现有任务进度）与环节 3（按日报计划生成新任务）**；各环节摘要将依次显示在本对话中。";
+        if (assistantUiMode === "user") {
+          setUserModeLive(null);
+          setStreamReveal({ full: reply, shown: "" });
+          let revealIdx = 0;
+          while (revealIdx < reply.length) {
+            revealIdx = nextRevealEnd(reply, revealIdx);
+            setStreamReveal({ full: reply, shown: reply.slice(0, revealIdx) });
+            await sleepMs(12);
+          }
+          setMessages((m) => [...m, { role: "assistant", text: reply }]);
+          setStreamReveal(null);
+        } else {
+          setMessages((m) => [...m, { role: "assistant", text: reply }]);
+        }
+        try {
+          appendAssistantHistoryTurn({
+            userText: text,
+            topicLabel: "报告管理·操作",
+            topicKeywords: "日报正文·聊天区录入",
+            scopeDescription: "operation_info.daily_report_body",
+            recordIdsSummary: `正文约 ${text.length} 字`,
+            answerSummary: reply,
+          });
+        } catch {
+          /* ignore */
+        }
+      } finally {
+        setBusy(false);
+        setUserModeLive(null);
+        setStreamReveal(null);
+      }
+      return;
+    }
 
     const opt = optimizeTargetRef.current;
     if (opt) {
@@ -452,7 +630,23 @@ export function HomeAiChatPanel() {
           return;
         }
         const d = ures.data;
-        if (d.kind === "report") {
+        if (d.kind === "operation" && d.awaitingReportBody) {
+          awaitingReportBodyFromChatRef.current = true;
+        }
+        if (d.kind === "operation") {
+          try {
+            appendAssistantHistoryTurn({
+              userText: text,
+              topicLabel: `${topicChineseLabel(d.router.topic)}·操作`,
+              topicKeywords: d.router.topic_rationale,
+              scopeDescription: d.confirmSummary,
+              recordIdsSummary: d.actionTokensLine,
+              answerSummary: d.answer,
+            });
+          } catch {
+            /* ignore */
+          }
+        } else if (d.kind === "report") {
           try {
             appendAssistantHistoryTurn({
               userText: text,
@@ -503,6 +697,31 @@ export function HomeAiChatPanel() {
     setBusy(true);
 
     const runOffline = (offlineRouter: TopicRouterResult) => {
+      if (offlineRouter.interaction_mode === "operation") {
+        setMessages((m) =>
+          patchLastPipeline(m, () => ({
+            steps: [
+              {
+                actionName: "意图判断",
+                status: "done",
+                resultFeedback: `离线判定：操作 · ${topicChineseLabel(offlineRouter.topic)}`,
+              },
+              {
+                actionName: "确认操作及范围",
+                status: "done",
+                resultFeedback: "当前未连接大模型，无法自动确认操作细节。",
+              },
+              {
+                actionName: "行操作执行",
+                status: "done",
+                resultFeedback:
+                  "当前未连接大模型，无法解析界面动作。请在「系统配置」填写模型 Key 后重试。",
+              },
+            ],
+          })),
+        );
+        return;
+      }
       setMessages((m) =>
         patchLastPipeline(m, () => ({
           steps: [
@@ -536,6 +755,7 @@ export function HomeAiChatPanel() {
       const env = readLlmEnv();
       if (!env) {
         const offlineRouter: TopicRouterResult = {
+          interaction_mode: inferOfflineInteractionMode(text),
           topic: inferOfflineTopic(text),
           topic_rationale: inferOfflineIntentSummary(text),
         };
@@ -552,7 +772,12 @@ export function HomeAiChatPanel() {
         } catch {
           /* 历史写入失败不影响主流程 */
         }
-        setMessages((m) => patchLastPipelineWithContext(m, offlineRouter.topic === "report_management"));
+        setMessages((m) =>
+          patchLastPipelineWithContext(m, {
+            isReport: offlineRouter.topic === "report_management",
+            pipelineKind: offlineRouter.interaction_mode === "operation" ? "operation" : "inquiry",
+          }),
+        );
         return;
       }
 
@@ -565,20 +790,138 @@ export function HomeAiChatPanel() {
       );
       const routerParsed = parseTopicRouterJson(routerRes.content);
       let router: TopicRouterResult = routerParsed ?? ROUTER_FALLBACK;
-      if (router.topic === "general") {
-        const inferred = inferTopicFromHistoryMarkdown(getAssistantHistoryForRouter());
-        if (
-          inferred &&
-          (inferred === "report_management" || inferred === "task_management") &&
-          !intentTopicSwitchedFromPrior(text, router.topic_rationale, inferred)
-        ) {
-          router = {
-            topic: inferred,
-            topic_rationale: `${router.topic_rationale}（多轮语境：根据 history.md 中近期主题线索延续为「${topicChineseLabel(inferred)}」。）`,
-          };
-        }
-      }
+      router = applyInquiryTopicHistoryFallback(router, text);
+      router = coerceOperationModeForReportIntake(router, text);
+      router = coerceOperationModeForTaskManualNew(router, text);
       const topicBlock = formatTopicBlock(router);
+
+      if (router.interaction_mode === "operation") {
+        const operationPipelineCtx: AssistantPipelineContextPersisted = { pipelineKind: "operation" };
+        const intentStepFeedback = appendDebugModelRawReturn(
+          `解析摘要：交互类型「操作」；主题「${topicChineseLabel(router.topic)}」\n判定说明：${router.topic_rationale}`,
+          routerRes.content,
+        );
+        setMessages((m) => {
+          const pipelined = patchLastPipeline(m, () => ({
+            steps: [
+              { actionName: "意图判断", status: "done", resultFeedback: intentStepFeedback },
+              { actionName: "确认操作及范围", status: "running" },
+              { actionName: "行操作执行", status: "waiting" },
+            ],
+          }));
+          return patchLastPipelineWithContext(pipelined, operationPipelineCtx);
+        });
+
+        const confirmRes = await callLlmChatJsonObject(
+          env,
+          buildOperationConfirmSystemPrompt(),
+          buildOperationConfirmUserPayload(text, topicBlock),
+          2048,
+        );
+        let confirm =
+          parseOperationConfirmJson(confirmRes.content) ??
+          ({
+            module: router.topic,
+            operation: "（未解析）",
+            operation_info: {},
+            user_facing_summary: "未能解析操作确认结果。",
+          } as const);
+        confirm = normalizeReportIntakeConfirm(confirm, text);
+        const confirmSummary = [
+          `模块：${topicChineseLabel(confirm.module)}`,
+          `操作：${confirm.operation}`,
+          `摘要：${confirm.user_facing_summary}`,
+          `operation_info：${JSON.stringify(confirm.operation_info)}`,
+        ].join("\n");
+        const confirmStepFeedback = appendDebugModelRawReturn(confirmSummary, confirmRes.content);
+
+        setMessages((m) =>
+          patchLastPipeline(m, (p) => ({
+            steps: p.steps.map((s, i) => {
+              if (i === 1)
+                return { ...s, status: "done" as const, resultFeedback: confirmStepFeedback };
+              if (i === 2) return { ...s, status: "running" as const };
+              return s;
+            }),
+          })),
+        );
+
+        if (shouldAwaitDailyReportBodyInChat(confirm)) {
+          dispatchAssistantUiActions([{ kind: "focus_report_extraction" }]);
+          awaitingReportBodyFromChatRef.current = true;
+          const execSummary =
+            "未调用行操作模型：按《核心记忆》需先在聊天区收集日报正文；已派发 focus_report_extraction。下一行请在助手输入框发送完整日报原文；发送后将**自动解析**并在本对话展示摘要。";
+          const execStepFeedback = appendDebugModelRawReturn(execSummary, "（无模型输出 — 等待聊天区日报正文）");
+          setMessages((m) =>
+            patchLastPipeline(m, (p) => ({
+              steps: p.steps.map((s, i) => {
+                if (i === 2)
+                  return { ...s, status: "done" as const, resultFeedback: execStepFeedback };
+                return s;
+              }),
+            })),
+          );
+          try {
+            appendAssistantHistoryTurn({
+              userText: text,
+              topicLabel: `${topicChineseLabel(router.topic)}·操作`,
+              topicKeywords: router.topic_rationale,
+              scopeDescription: `${confirm.operation}｜${confirm.user_facing_summary}`,
+              recordIdsSummary: "等待聊天区日报正文",
+              answerSummary: execSummary,
+            });
+          } catch {
+            /* ignore */
+          }
+          setMessages((m) => patchLastPipelineWithContext(m, operationPipelineCtx));
+          return;
+        }
+
+        const pastedBody = getDailyReportBodyFromOperationInfo(confirm.operation_info);
+        if (pastedBody.length >= DAILY_REPORT_BODY_MIN_LEN) {
+          dispatchAssistantSetReportManualText(pastedBody);
+        }
+
+        const confirmJson = JSON.stringify(confirm, null, 2);
+        const execRes = await callLlmChatJsonObject(
+          env,
+          buildOperationExecuteSystemPrompt(),
+          buildOperationExecuteUserPayload(text, topicBlock, confirmJson),
+          1024,
+        );
+        const execParsed = parseOperationExecuteJson(execRes.content);
+        const tokens = runAssistantOperationUiActions(execRes.content.trim());
+        const execSummary = [
+          execParsed?.rationale ?? "（无 rationale）",
+          tokens.length ? `ui_action_tokens：${tokens.join(" → ")}` : "（未触发界面动作）",
+        ].join("\n");
+        const execStepFeedback = appendDebugModelRawReturn(execSummary, execRes.content);
+
+        setMessages((m) =>
+          patchLastPipeline(m, (p) => ({
+            steps: p.steps.map((s, i) => {
+              if (i === 2)
+                return { ...s, status: "done" as const, resultFeedback: execStepFeedback };
+              return s;
+            }),
+          })),
+        );
+
+        try {
+          appendAssistantHistoryTurn({
+            userText: text,
+            topicLabel: `${topicChineseLabel(router.topic)}·操作`,
+            topicKeywords: router.topic_rationale,
+            scopeDescription: `${confirm.operation}｜${confirm.user_facing_summary}`,
+            recordIdsSummary: tokens.length ? tokens.join("、") : "—",
+            answerSummary: execSummary,
+          });
+        } catch {
+          /* ignore */
+        }
+        setMessages((m) => patchLastPipelineWithContext(m, operationPipelineCtx));
+        return;
+      }
 
       setMessages((m) =>
         patchLastPipeline(m, (p) => ({
@@ -587,7 +930,7 @@ export function HomeAiChatPanel() {
               return {
                 ...s,
                 status: "done" as const,
-                resultFeedback: `已经确认查询主题：${topicChineseLabel(router.topic)}`,
+                resultFeedback: `已经确认：询问 · ${topicChineseLabel(router.topic)}`,
               };
             if (i === 1) return { ...s, status: "running" as const };
             return s;
@@ -874,7 +1217,9 @@ export function HomeAiChatPanel() {
         }
       }
 
-      setMessages((m) => patchLastPipelineWithContext(m, isReport));
+      setMessages((m) =>
+        patchLastPipelineWithContext(m, { isReport, pipelineKind: "inquiry" }),
+      );
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e);
       try {

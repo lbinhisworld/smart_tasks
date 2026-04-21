@@ -228,7 +228,7 @@ export function readAssistantHistoryMarkdownFile(): string {
 }
 
 /** 与 TopicRouterResult.topic 对齐，用于跟进问句从 history 延续主题 */
-export type InferredTopicFromHistory = "report_management" | "task_management" | "general";
+export type InferredTopicFromHistory = "report_management" | "task_management" | "dashboard" | "general";
 
 /**
  * 从 history.md 正文中最近若干条压缩行（`- 概:…|意:…|据:…`）推断上一轮业务主题。
@@ -246,6 +246,7 @@ export function inferTopicFromHistoryMarkdown(historyText: string): InferredTopi
     const intentPart = im[1].trim();
     if (intentPart.includes("报告管理")) return "report_management";
     if (intentPart.includes("任务管理")) return "task_management";
+    if (intentPart.includes("数据看板")) return "dashboard";
   }
   return null;
 }
@@ -257,7 +258,7 @@ export function inferTopicFromHistoryMarkdown(historyText: string): InferredTopi
 export function intentTopicSwitchedFromPrior(
   userQuestion: string,
   topicRationale: string,
-  priorTopic: "report_management" | "task_management",
+  priorTopic: "report_management" | "task_management" | "dashboard",
 ): boolean {
   const q = userQuestion.trim();
   const r = topicRationale.trim();
@@ -270,6 +271,10 @@ export function intentTopicSwitchedFromPrior(
     /报告管理|生产日报|提取历史|报告看板|KPI|产量指标|分公司.*日报|安环通报/i.test(q);
   const taskCue =
     /QF-[A-Z]{2}-[A-Z]{3}-\d{4}|任务编号|任务状态|计划历史|协调方|任务列表|重点任务(?!系统)/i.test(q);
+  if (priorTopic === "dashboard") {
+    if (reportCue || taskCue) return true;
+    return false;
+  }
   if (priorTopic === "task_management" && reportCue) return true;
   if (priorTopic === "report_management" && taskCue) return true;
   return false;

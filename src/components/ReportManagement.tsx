@@ -3,7 +3,7 @@
  *
  * **设计要点**
  * - `consumeExtractionFocusFromStorage`：挂载时 `useLayoutEffect` 读一次；另监听 `OPEN_REPORTS_PAGE_EVENT`，在报告页已挂载时也能消费看板「跳转原文」写入的 `sessionStorage`。
- * - 提取日期优先从正文 `extractDateFromPlainText`，否则 `formatExtractionDate()`，与 `normalizeProductionReportJson` 对齐。
+ * - 提取日期优先从正文 `extractPrimaryReportDateFromPlainText`（文首日期优先），否则 `formatExtractionDate()`，与 `normalizeProductionReportJson` 对齐。
  * - 监听 `LLM_CONFIG_CHANGED_EVENT` 仅用于 bump 内部 epoch，触发依赖 `readLlmEnv()` 的 UI 重算。
  *
  * @module ReportManagement
@@ -36,7 +36,7 @@ import {
 } from "../utils/extractionHistoryStorage";
 import { buildTimelineGroups } from "../utils/extractionHistoryGroup";
 import { downloadOriginalReportsJsonFile } from "../utils/downloadOriginalReportsJson";
-import { extractDateFromPlainText } from "../utils/extractDateFromText";
+import { extractPrimaryReportDateFromPlainText } from "../utils/extractDateFromText";
 import { buildReportPreviewTasksSingle } from "../utils/buildReportPreviewTasks";
 import { buildExtractionHistoryTitle } from "../utils/extractionHistoryTitle";
 import {
@@ -54,6 +54,15 @@ import { extractTextFromFile } from "../utils/extractFileText";
 import { buildPendingTasksFromSavedReport } from "../utils/buildPendingTasksFromSavedReport";
 import { buildQuantitativeMetricCitations } from "../utils/quantitativeMetricCitations";
 import { EXTRACTION_FOCUS_STORAGE_KEY, OPEN_REPORTS_PAGE_EVENT } from "../utils/reportCitation";
+import {
+  ASSISTANT_REPORT_PARSE_EVENT,
+  ASSISTANT_SET_REPORT_MANUAL_TEXT_EVENT,
+  REPORT_FOCUS_EXTRACTION_EVENT,
+  dispatchAssistantReportChainDone,
+  dispatchAssistantReportParseResult,
+  type AssistantReportParseRequest,
+  type AssistantReportParseResultDetail,
+} from "../utils/assistantUiActions";
 import { extractionHistoryVisibleForPerspective } from "../utils/leaderPerspective";
 import { loadCleanedJsonFromSession } from "../utils/dataHubCleanedJsonStorage";
 import { loadDataHubState } from "../utils/externalApiStorage";
@@ -168,6 +177,11 @@ export function ReportManagement() {
     normalizePlanGenPanelAfterLoad(loadReportSidePanelsDraft()?.planGenPanel ?? null),
   );
   const [planGenRunning, setPlanGenRunning] = useState(false);
+  /** 助手「输入报告」解析成功后自动串联环节 2→3 的触发计数（每解析成功且请求链式执行时 +1） */
+  const [assistCoreMemoryChainNonce, setAssistCoreMemoryChainNonce] = useState(0);
+  const assistCoreChainInFlightRef = useRef(false);
+  /** 已完整跑完环节 2+3 的最大 nonce，避免依赖变化导致同一轮重复执行 */
+  const lastAssistCoreChainFinishedRef = useRef(0);
 
   useEffect(() => {
     if (taskProgressPanel === null && planGenPanel === null) {
@@ -307,6 +321,12 @@ export function ReportManagement() {
   }, [consumeExtractionFocusFromStorage]);
 
   useEffect(() => {
+    const onFocusExtraction = () => setReportMgmtTab("extract");
+    window.addEventListener(REPORT_FOCUS_EXTRACTION_EVENT, onFocusExtraction);
+    return () => window.removeEventListener(REPORT_FOCUS_EXTRACTION_EVENT, onFocusExtraction);
+  }, []);
+
+  useEffect(() => {
     const bump = () => setConfigEpoch((n) => n + 1);
     window.addEventListener(LLM_CONFIG_CHANGED_EVENT, bump);
     return () => window.removeEventListener(LLM_CONFIG_CHANGED_EVENT, bump);
@@ -436,7 +456,14 @@ export function ReportManagement() {
   const textFromFileLocked = file !== null;
   const fileFromTextLocked = manualText.trim() !== "";
 
-  const parseReport = useCallback(async () => {
+  const parseReport = useCallback(async (req?: AssistantReportParseRequest) => {
+    const assistantChatFollowup = req?.assistantChatFollowup ?? false;
+    const wantCoreMemoryChain = assistantChatFollowup && (req?.chainCoreMemorySteps ?? false);
+    const sourceTextOverride = req?.sourceText?.trim() || undefined;
+    const emitFollowup = (detail: AssistantReportParseResultDetail) => {
+      if (assistantChatFollowup) dispatchAssistantReportParseResult(detail);
+    };
+
     clearReportExtractionPreviewDraft();
     setError(null);
     setExtracted(null);
@@ -446,15 +473,18 @@ export function ReportManagement() {
     setHubStandardRows(null);
     setHubBranchParses(null);
     setHubExtractionProgress(null);
-    if (!file && !manualText.trim()) {
+    const effectiveManual = sourceTextOverride ?? manualText.trim();
+    if (!file && !effectiveManual) {
       setError("请上传附件，或在上方文本框中粘贴日报正文（二选一）。");
+      emitFollowup({ ok: false, extractionDate: "", companyName: "", error: "未提供附件或日报正文。" });
       return;
     }
     const env = readLlmEnv();
     if (!env) {
-      setError(
-        '请先在顶部点击设置图标打开「大模型 Key」，填写并保存 DeepSeek API Key；或在 .env 中配置 VITE_LLM_API_KEY / 开发代理（详见 .env.example）。开发环境下 DeepSeek 请求走同源代理 /api/deepseek。',
-      );
+      const msg =
+        '请先在顶部点击设置图标打开「大模型 Key」，填写并保存 DeepSeek API Key；或在 .env 中配置 VITE_LLM_API_KEY / 开发代理（详见 .env.example）。开发环境下 DeepSeek 请求走同源代理 /api/deepseek。';
+      setError(msg);
+      emitFollowup({ ok: false, extractionDate: "", companyName: "", error: msg });
       return;
     }
     setTaskProgressPanel(null);
@@ -463,13 +493,13 @@ export function ReportManagement() {
 
     try {
       setPhase("reading");
-      const ex = file
-        ? await extractTextFromFile(file)
-        : { text: manualText.trim() };
+      const ex = file ? await extractTextFromFile(file) : { text: effectiveManual };
       setExtracted(ex);
       if (!ex.text.trim()) {
         setPhase("error");
-        setError(ex.note || "未能从文件中提取到可用文本。");
+        const note = ex.note || "未能从文件中提取到可用文本。";
+        setError(note);
+        emitFollowup({ ok: false, extractionDate: "", companyName: "", error: note });
         return;
       }
 
@@ -479,9 +509,10 @@ export function ReportManagement() {
         if (hubTry.isHubShape) {
           if (hubTry.rows.length === 0) {
             setPhase("error");
-            setError(
-              "数据中台 JSON 中未解析到有效日报条目（请确认存在 data.list，且条目含 variables：日报日期 / 所属分公司 / 日报内容）。",
-            );
+            const hubErr =
+              "数据中台 JSON 中未解析到有效日报条目（请确认存在 data.list，且条目含 variables：日报日期 / 所属分公司 / 日报内容）。";
+            setError(hubErr);
+            emitFollowup({ ok: false, extractionDate: "", companyName: "", error: hubErr });
             return;
           }
           setHubStandardRows(hubTry.rows);
@@ -605,13 +636,23 @@ export function ReportManagement() {
           setParsed(null);
           setLlmCallStats(aggregateLlmStats(statsAcc));
           setPhase("done");
+          if (assistantChatFollowup) {
+            dispatchAssistantReportParseResult({
+              ok: true,
+              extractionDate: "",
+              companyName: "",
+              error: null,
+              willChainCoreMemory: false,
+              summaryLine: `已按数据中台格式解析 **${hubTry.rows.length}** 条日报分支，结果在报告管理 **报告提取** 区各预览卡中，可在该页继续《核心记忆》后续环节。`,
+            });
+          }
           return;
         }
       }
 
       setPhase("calling");
       const extractionDate =
-        extractDateFromPlainText(ex.text) ?? formatExtractionDate(new Date());
+        extractPrimaryReportDateFromPlainText(ex.text) ?? formatExtractionDate(new Date());
       const apiResult = await callProductionReportExtraction(ex.text, env, extractionDate);
       setLlmCallStats({
         model: apiResult.model,
@@ -622,18 +663,78 @@ export function ReportManagement() {
       });
       const raw = normalizeProductionReportJson(apiResult.content, extractionDate);
       setRawModel(raw);
+      let parsedOkForChain = false;
       try {
         setParsed(parseJsonSafe(raw));
+        parsedOkForChain = true;
       } catch {
         setParsed(null);
         setError("模型返回内容不是合法 JSON，已在下方展示原文。");
       }
       setPhase("done");
+      if (assistantChatFollowup) {
+        let extractionDateOut = extractionDate;
+        let companyNameOut = "";
+        try {
+          const o = parseJsonSafe(raw) as Record<string, unknown> | null;
+          if (o && typeof o["提取日期"] === "string" && o["提取日期"].trim()) {
+            extractionDateOut = o["提取日期"].trim();
+          }
+          if (o && typeof o["分公司名称"] === "string") companyNameOut = o["分公司名称"].trim();
+        } catch {
+          /* ignore */
+        }
+        dispatchAssistantReportParseResult({
+          ok: true,
+          extractionDate: extractionDateOut,
+          companyName: companyNameOut,
+          error: null,
+          willChainCoreMemory: wantCoreMemoryChain && parsedOkForChain,
+        });
+        if (wantCoreMemoryChain && parsedOkForChain) {
+          setAssistCoreMemoryChainNonce((n) => n + 1);
+        }
+      }
     } catch (err) {
       setPhase("error");
-      setError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      emitFollowup({ ok: false, extractionDate: "", companyName: "", error: msg });
     }
   }, [file, manualText, manualFromDataHub]);
+
+  useEffect(() => {
+    const onAssistantParse = (ev: Event) => {
+      const d = (ev as CustomEvent<AssistantReportParseRequest>).detail ?? {};
+      void parseReport(d);
+    };
+    window.addEventListener(ASSISTANT_REPORT_PARSE_EVENT, onAssistantParse);
+    return () => window.removeEventListener(ASSISTANT_REPORT_PARSE_EVENT, onAssistantParse);
+  }, [parseReport]);
+
+  useEffect(() => {
+    const onSetManualFromAssistant = (ev: Event) => {
+      const raw = (ev as CustomEvent<{ text: string }>).detail?.text;
+      const v = typeof raw === "string" ? raw : "";
+      setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setManualFromDataHub(false);
+      clearReportExtractionPreviewDraft();
+      setExtracted(null);
+      setRawModel(null);
+      setParsed(null);
+      setLlmCallStats(null);
+      setError(null);
+      setPhase("idle");
+      setHubStandardRows(null);
+      setHubBranchParses(null);
+      setHubExtractionProgress(null);
+      setManualText(v);
+      setReportMgmtTab("extract");
+    };
+    window.addEventListener(ASSISTANT_SET_REPORT_MANUAL_TEXT_EVENT, onSetManualFromAssistant);
+    return () => window.removeEventListener(ASSISTANT_SET_REPORT_MANUAL_TEXT_EVENT, onSetManualFromAssistant);
+  }, []);
 
   const canSaveToHistory = useMemo(() => {
     if (hubBranchParses?.length) {
@@ -729,19 +830,24 @@ export function ReportManagement() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, [rawModel, extracted, parsed, file?.name, llmCallStats, hubBranchParses]);
 
-  const runTaskProgressUpdate = useCallback(async () => {
-    const env = readLlmEnv();
-    if (!env) {
-      window.alert("请先配置大模型 Key。");
-      return;
-    }
-    const slices = collectReportCompanyDailySlices(hubBranchParses, parsed, extracted?.text ?? null);
-    if (slices.length === 0) {
-      window.alert(
-        "当前没有可用的「分公司日报」数据。请先完成解析，并确保分公司名称与日报内容有效（单日报需在解析结果中含有效的「分公司名称」）。",
-      );
-      return;
-    }
+  const runTaskProgressUpdate = useCallback(
+    async (opts?: { quiet?: boolean }): Promise<{ updated: number; skipped: string | null }> => {
+      const quiet = opts?.quiet ?? false;
+      const env = readLlmEnv();
+      if (!env) {
+        if (!quiet) window.alert("请先配置大模型 Key。");
+        return { updated: 0, skipped: quiet ? "no_env" : null };
+      }
+      const slices = collectReportCompanyDailySlices(hubBranchParses, parsed, extracted?.text ?? null);
+      if (slices.length === 0) {
+        if (!quiet) {
+          window.alert(
+            "当前没有可用的「分公司日报」数据。请先完成解析，并确保分公司名称与日报内容有效（单日报需在解析结果中含有效的「分公司名称」）。",
+          );
+        }
+        return { updated: 0, skipped: "no_slices" };
+      }
+      let updatedCount = 0;
     const initialCompanies: CompanyProgressCardState[] = slices.map((s) => {
       const tasks = visibleTasks
         .filter((t) => t.status !== "已完成" && taskMatchesReportCompany(t, s.companyName))
@@ -848,6 +954,7 @@ export function ReportManagement() {
               taskPatch.leaderInstruction = inf.leaderInstruction;
             }
             updateTask(tid, taskPatch);
+            updatedCount += 1;
             setTaskProgressPanel((prev) => {
               if (!prev) return prev;
               return {
@@ -908,25 +1015,33 @@ export function ReportManagement() {
     } finally {
       setTaskProgressRunning(false);
     }
-  }, [visibleTasks, hubBranchParses, parsed, extracted?.text, updateTask]);
+      return { updated: updatedCount, skipped: null };
+    },
+    [visibleTasks, hubBranchParses, parsed, extracted?.text, updateTask],
+  );
 
-  const runDailyPlanTaskGeneration = useCallback(async () => {
-    const env = readLlmEnv();
-    if (!env) {
-      window.alert("请先配置大模型 Key。");
-      return;
-    }
-    if (phase !== "done") {
-      window.alert("请先完成报告解析。");
-      return;
-    }
-    const contexts = collectReportCompanyPlanContexts(hubBranchParses, parsed, extracted?.text ?? null);
-    if (contexts.length === 0) {
-      window.alert(
-        "当前没有可用的分公司日报解析结果（需中台多卡含分公司与正文，或单卡解析含「分公司名称」）。",
-      );
-      return;
-    }
+  const runDailyPlanTaskGeneration = useCallback(
+    async (opts?: { quiet?: boolean }): Promise<{ generated: number; skipped: string | null }> => {
+      const quiet = opts?.quiet ?? false;
+      const env = readLlmEnv();
+      if (!env) {
+        if (!quiet) window.alert("请先配置大模型 Key。");
+        return { generated: 0, skipped: quiet ? "no_env" : null };
+      }
+      if (phase !== "done") {
+        if (!quiet) window.alert("请先完成报告解析。");
+        return { generated: 0, skipped: "phase" };
+      }
+      const contexts = collectReportCompanyPlanContexts(hubBranchParses, parsed, extracted?.text ?? null);
+      if (contexts.length === 0) {
+        if (!quiet) {
+          window.alert(
+            "当前没有可用的分公司日报解析结果（需中台多卡含分公司与正文，或单卡解析含「分公司名称」）。",
+          );
+        }
+        return { generated: 0, skipped: "no_contexts" };
+      }
+      let totalGenerated = 0;
     setPlanGenPanel({
       companies: contexts.map((c) => ({
         companyName: c.companyName,
@@ -1097,11 +1212,47 @@ export function ReportManagement() {
             ),
           };
         });
+        totalGenerated += okCount;
       }
     } finally {
       setPlanGenRunning(false);
     }
-  }, [phase, hubBranchParses, parsed, extracted?.text, user.perspective, addTask]);
+      return { generated: totalGenerated, skipped: null };
+    },
+    [phase, hubBranchParses, parsed, extracted?.text, user.perspective, addTask],
+  );
+
+  useEffect(() => {
+    if (phase !== "done" || assistCoreMemoryChainNonce === 0) return;
+    if (assistCoreMemoryChainNonce <= lastAssistCoreChainFinishedRef.current) return;
+    if (assistCoreChainInFlightRef.current) return;
+    const target = assistCoreMemoryChainNonce;
+    assistCoreChainInFlightRef.current = true;
+    void (async () => {
+      try {
+        const prog = await runTaskProgressUpdate({ quiet: true });
+        const plan = await runDailyPlanTaskGeneration({ quiet: true });
+        dispatchAssistantReportChainDone({
+          progressUpdated: prog.updated,
+          progressSkipped: prog.skipped,
+          planGenerated: plan.generated,
+          planSkipped: plan.skipped,
+          chainError: null,
+        });
+      } catch (e) {
+        dispatchAssistantReportChainDone({
+          progressUpdated: 0,
+          progressSkipped: null,
+          planGenerated: 0,
+          planSkipped: null,
+          chainError: e instanceof Error ? e.message : String(e),
+        });
+      } finally {
+        assistCoreChainInFlightRef.current = false;
+        lastAssistCoreChainFinishedRef.current = Math.max(lastAssistCoreChainFinishedRef.current, target);
+      }
+    })();
+  }, [phase, assistCoreMemoryChainNonce, runTaskProgressUpdate, runDailyPlanTaskGeneration]);
 
   const removeHistory = useCallback((id: string) => {
     setHistory(removeExtractionHistoryItem(id));

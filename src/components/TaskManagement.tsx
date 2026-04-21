@@ -32,6 +32,7 @@ import {
 } from "../utils/planHistoryStorage";
 import { isIsoDateString, PENDING_EXPECTED_COMPLETION } from "../utils/taskDueDate";
 import { requestJumpToExtractionHistory } from "../utils/reportCitation";
+import { TASK_OPEN_MANUAL_NEW_EVENT } from "../utils/assistantUiActions";
 
 type TaskMgmtTab = "list" | "planHistory";
 
@@ -120,6 +121,15 @@ export function TaskManagement() {
     const bump = () => setOrgEpoch((n) => n + 1);
     window.addEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
     return () => window.removeEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
+  }, []);
+
+  useEffect(() => {
+    const onAssistantOpenManual = () => {
+      setTaskMgmtTab("list");
+      setManualNewTaskOpen(true);
+    };
+    window.addEventListener(TASK_OPEN_MANUAL_NEW_EVENT, onAssistantOpenManual);
+    return () => window.removeEventListener(TASK_OPEN_MANUAL_NEW_EVENT, onAssistantOpenManual);
   }, []);
 
   useEffect(() => {

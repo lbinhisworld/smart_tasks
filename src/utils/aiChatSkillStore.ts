@@ -1,5 +1,5 @@
 /**
- * @fileoverview AI 助手四环节提示词：`docs/ai_chat_skill.md` 为默认源，运行时覆盖存 localStorage，可导出为 ai_chat_skill.md。
+ * @fileoverview AI 助手环节提示词：`docs/ai_chat_skill.md` 为默认源，运行时覆盖存 localStorage，可导出为 ai_chat_skill.md。
  */
 
 import defaultSkillMarkdown from "../../docs/ai_chat_skill.md?raw";
@@ -16,7 +16,9 @@ export type AiChatSkillKey =
   | "data_scope_report"
   | "data_record_tasks"
   | "data_record_report"
-  | "final_answer";
+  | "final_answer"
+  | "operation_confirm"
+  | "operation_execute";
 
 export const AI_CHAT_SKILL_KEY_LABEL: Record<AiChatSkillKey, string> = {
   intent: "意图判断",
@@ -25,6 +27,8 @@ export const AI_CHAT_SKILL_KEY_LABEL: Record<AiChatSkillKey, string> = {
   data_record_tasks: "数据记录判断（任务/综合）",
   data_record_report: "数据记录判断（报告）",
   final_answer: "具体数据返回",
+  operation_confirm: "操作确认及范围",
+  operation_execute: "行操作执行",
 };
 
 const STANDARD_PREAMBLE = `# AI 助手环节提示词（ai_chat_skill）
@@ -77,6 +81,8 @@ export function parseSkillPartsFromMarkdown(md: string): Partial<Record<AiChatSk
   const scopeBlock = parseH2Block(md, "数据范围判断");
   const recordBlock = parseH2Block(md, "数据记录判断");
   const finalBlock = parseH2Block(md, "具体数据返回");
+  const opConfirmBlock = parseH2Block(md, "操作确认及范围");
+  const opExecBlock = parseH2Block(md, "行操作执行");
 
   const out: Partial<Record<AiChatSkillKey, string>> = {};
   if (intentBlock) out.intent = intentBlock;
@@ -93,6 +99,8 @@ export function parseSkillPartsFromMarkdown(md: string): Partial<Record<AiChatSk
     if (r) out.data_record_report = r;
   }
   if (finalBlock) out.final_answer = finalBlock;
+  if (opConfirmBlock) out.operation_confirm = opConfirmBlock;
+  if (opExecBlock) out.operation_execute = opExecBlock;
   return out;
 }
 
@@ -126,6 +134,14 @@ ${parts.data_record_report.trim()}
 ## 具体数据返回
 
 ${parts.final_answer.trim()}
+
+## 操作确认及范围
+
+${parts.operation_confirm.trim()}
+
+## 行操作执行
+
+${parts.operation_execute.trim()}
 `;
 }
 
@@ -138,6 +154,8 @@ function defaultParts(): Record<AiChatSkillKey, string> {
     "data_record_tasks",
     "data_record_report",
     "final_answer",
+    "operation_confirm",
+    "operation_execute",
   ];
   const out = {} as Record<AiChatSkillKey, string>;
   for (const k of keys) {
@@ -187,7 +205,14 @@ export function setAiChatSkillMarkdown(fullMd: string): void {
 
 /** 保存前校验主要 ## 标题是否存在（缺失时环节解析可能回退到内置默认）。 */
 export function validateAiChatSkillMarkdownShape(md: string): string | null {
-  const need = ["## 意图判断", "## 数据范围判断", "## 数据记录判断", "## 具体数据返回"];
+  const need = [
+    "## 意图判断",
+    "## 数据范围判断",
+    "## 数据记录判断",
+    "## 具体数据返回",
+    "## 操作确认及范围",
+    "## 行操作执行",
+  ];
   for (const h of need) {
     if (!md.includes(h)) return `正文中缺少「${h}」，保存后部分环节可能仍使用内置默认片段。`;
   }
@@ -268,6 +293,27 @@ export function resolveFinalDataAnswerSystemPrompt(): string {
   return getSkillParts().final_answer;
 }
 
+export function resolveOperationConfirmSystemPrompt(): string {
+  const history = getAssistantHistoryForRouter();
+  const raw = getSkillParts().operation_confirm;
+  const hadHistoryPlaceholder = raw.includes("{{ASSISTANT_HISTORY}}");
+  let s = raw
+    .replace(/\{\{CORE_MEMORY\}\}/g, getCoreMemoryText().trim())
+    .replace(/\{\{ASSISTANT_HISTORY\}\}/g, history);
+  if (!hadHistoryPlaceholder && !s.includes("【近期交互压缩历史（history.md）】")) {
+    const marker = "【你必须输出的 JSON】";
+    const idx = s.indexOf(marker);
+    const block = `\n【近期交互压缩历史（history.md）】\n${history}\n\n`;
+    if (idx >= 0) s = s.slice(0, idx) + block + s.slice(idx);
+    else s += block;
+  }
+  return s;
+}
+
+export function resolveOperationExecuteSystemPrompt(): string {
+  return getSkillParts().operation_execute.replace(/\{\{CORE_MEMORY\}\}/g, getCoreMemoryText().trim());
+}
+
 /** 取某一环节的「静态」正文（占位符不展开，供优化/修订展示） */
 export function getSkillPartRaw(key: AiChatSkillKey): string {
   return getSkillParts()[key];
@@ -306,6 +352,22 @@ export function skillKeyForPipelineStep(
       return isReport
         ? { key: "data_record_report", label: "具体数据返回（报告应答）" }
         : { key: "final_answer", label: "具体数据返回" };
+    default:
+      return null;
+  }
+}
+
+/** 操作路径调试流水线：意图判断 → 操作确认及范围 → 行操作执行 */
+export function skillKeyForOperationPipelineStep(
+  stepIndex: number,
+): { key: AiChatSkillKey; label: string } | null {
+  switch (stepIndex) {
+    case 0:
+      return { key: "intent", label: "意图判断" };
+    case 1:
+      return { key: "operation_confirm", label: "确认操作及范围" };
+    case 2:
+      return { key: "operation_execute", label: "行操作执行" };
     default:
       return null;
   }

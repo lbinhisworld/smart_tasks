@@ -151,6 +151,15 @@
   flex-direction: column;
 }
 
+/* 四页同挂时看板外层用 flex 承接高度，避免内联 display:block 打断 min-height:0 链，导致左右栏无法纵向滚动 */
+.main-area.main-area--home-board > .app-route-pane--board {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .home-page-split {
   flex: 1 1 auto;
   min-height: 0;
@@ -710,6 +719,12 @@ button.linkish:hover {
     flex: none;
     overflow: visible;
     min-height: auto;
+  }
+
+  .main-area.main-area--home-board > .app-route-pane--board {
+    flex: none;
+    min-height: 0;
+    overflow: visible;
   }
 }
 

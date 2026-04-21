@@ -462,7 +462,7 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
           {tab === "chat_skill_md" && (
             <div className="app-config-panel app-config-panel--md" role="tabpanel">
               <p className="muted small app-config-intro">
-                四环节大模型 system 提示词。默认来自仓库 <code>docs/ai_chat_skill.md</code>；保存后写入 localStorage 全文。请勿删除必要的{" "}
+                各环节中使用的 system 提示词（含询问与操作路径）。默认来自仓库 <code>docs/ai_chat_skill.md</code>；保存后写入 localStorage 全文。请勿删除必要的{" "}
                 <code>##</code> 章节标题，以免解析异常。
               </p>
               <div className="app-config-md-toolbar">

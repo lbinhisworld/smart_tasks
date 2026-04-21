@@ -12,6 +12,13 @@ import {
   tasksToLlmRows,
 } from "./homeAssistantDataRows";
 import {
+  dispatchAssistantSetReportManualText,
+  dispatchAssistantUiActions,
+} from "./assistantUiActions";
+import {
+  applyInquiryTopicHistoryFallback,
+  coerceOperationModeForReportIntake,
+  coerceOperationModeForTaskManualNew,
   buildDataRecordSystemPrompt,
   buildDataRecordUserPayload,
   buildDataScopeSystemPrompt,
@@ -19,6 +26,10 @@ import {
   buildDataScopeUserPayload,
   buildFinalDataAnswerSystemPrompt,
   buildFinalDataAnswerUserPayload,
+  buildOperationConfirmSystemPrompt,
+  buildOperationConfirmUserPayload,
+  buildOperationExecuteSystemPrompt,
+  buildOperationExecuteUserPayload,
   buildReportDataRecordSystemPrompt,
   buildReportDataRecordUserPayload,
   buildTopicRouterSystemPrompt,
@@ -30,18 +41,19 @@ import {
   parseDataScopeJson,
   parseDataScopeReportJson,
   parseFinalAnswerJson,
+  parseOperationConfirmJson,
+  parseOperationExecuteJson,
   parseReportDataRecordJudgmentJson,
+  DAILY_REPORT_BODY_MIN_LEN,
+  getDailyReportBodyFromOperationInfo,
+  normalizeReportIntakeConfirm,
   parseTopicRouterJson,
-  topicChineseLabel,
+  runAssistantOperationUiActions,
+  shouldAwaitDailyReportBodyInChat,
   type ReportDataScopeResult,
   type TopicRouterResult,
 } from "./homeAssistantPrompt";
 import { buildReportStructuredArrayForLlm } from "./homeAssistantReportPayload";
-import {
-  getAssistantHistoryForRouter,
-  inferTopicFromHistoryMarkdown,
-  intentTopicSwitchedFromPrior,
-} from "./assistantHistoryMd";
 import {
   callLlmChatJsonObject,
   callLlmChatJsonObjectStreaming,
@@ -56,6 +68,7 @@ import {
 } from "./reportExtractionScopeFilter";
 
 const ROUTER_FALLBACK: TopicRouterResult = {
+  interaction_mode: "inquiry",
   topic: "general",
   topic_rationale: "未能解析主题路由结果，已按「综合或其它」处理。",
 };
@@ -85,6 +98,15 @@ export type UserModePipelineOk =
       router: TopicRouterResult;
       scopeDescription: string;
       idLine: string;
+    }
+  | {
+      kind: "operation";
+      answer: string;
+      router: TopicRouterResult;
+      confirmSummary: string;
+      actionTokensLine: string;
+      /** 已提示「请提供日报原文」，下一轮用户发送将写入日报正文 */
+      awaitingReportBody?: boolean;
     };
 
 export async function runHomeAiUserModePipeline(
@@ -106,20 +128,86 @@ export async function runHomeAiUserModePipeline(
       ),
     );
     let router: TopicRouterResult = parseTopicRouterJson(routerRes.content) ?? ROUTER_FALLBACK;
-    if (router.topic === "general") {
-      const inferred = inferTopicFromHistoryMarkdown(getAssistantHistoryForRouter());
-      if (
-        inferred &&
-        (inferred === "report_management" || inferred === "task_management") &&
-        !intentTopicSwitchedFromPrior(text, router.topic_rationale, inferred)
-      ) {
-        router = {
-          topic: inferred,
-          topic_rationale: `${router.topic_rationale}（多轮语境：根据 history.md 中近期主题线索延续为「${topicChineseLabel(inferred)}」。）`,
+    router = applyInquiryTopicHistoryFallback(router, text);
+    router = coerceOperationModeForReportIntake(router, text);
+    router = coerceOperationModeForTaskManualNew(router, text);
+    const topicBlock = formatTopicBlock(router);
+
+    if (router.interaction_mode === "operation") {
+      const confirmRes = await runStage("确认操作及范围", (onDelta) =>
+        callLlmChatJsonObjectStreaming(
+          env,
+          buildOperationConfirmSystemPrompt(),
+          buildOperationConfirmUserPayload(text, topicBlock),
+          2048,
+          onDelta,
+        ),
+      );
+      let confirm =
+        parseOperationConfirmJson(confirmRes.content) ??
+        ({
+          module: router.topic,
+          operation: "（未解析）",
+          operation_info: {},
+          user_facing_summary: "未能解析操作确认结果，未触发界面动作。",
+        } as const);
+      confirm = normalizeReportIntakeConfirm(confirm, text);
+
+      if (shouldAwaitDailyReportBodyInChat(confirm)) {
+        dispatchAssistantUiActions([{ kind: "focus_report_extraction" }]);
+        const answer = [
+          `**${confirm.user_facing_summary}**`,
+          "",
+          "请先在本对话输入框中发送**日报原文**（完整正文）。发送后系统将按《核心记忆》写入「日报正文」并**自动执行解析原文**；提取摘要将显示在本对话中。",
+        ].join("\n");
+        return {
+          ok: true,
+          data: {
+            kind: "operation",
+            answer,
+            router,
+            confirmSummary: `${confirm.operation}｜${confirm.user_facing_summary}`,
+            actionTokensLine: "focus_report_extraction（等待聊天区日报正文）",
+            awaitingReportBody: true,
+          },
         };
       }
+
+      const pastedBody = getDailyReportBodyFromOperationInfo(confirm.operation_info);
+      if (pastedBody.length >= DAILY_REPORT_BODY_MIN_LEN) {
+        dispatchAssistantSetReportManualText(pastedBody);
+      }
+
+      const confirmJson = JSON.stringify(confirm, null, 2);
+      const execRes = await runStage("行操作执行", (onDelta) =>
+        callLlmChatJsonObjectStreaming(
+          env,
+          buildOperationExecuteSystemPrompt(),
+          buildOperationExecuteUserPayload(text, topicBlock, confirmJson),
+          1024,
+          onDelta,
+        ),
+      );
+      const execParsed = parseOperationExecuteJson(execRes.content);
+      const rawExec = execRes.content.trim();
+      const actionTokens = runAssistantOperationUiActions(rawExec);
+      const rationale = execParsed?.rationale?.trim() ?? "（模型未返回说明）";
+      const tokenLine = actionTokens.length ? actionTokens.join(" → ") : "（无）";
+      const answer = [`**${confirm.user_facing_summary}**`, "", rationale, "", `界面动作序列：${tokenLine}`]
+        .filter(Boolean)
+        .join("\n");
+      return {
+        ok: true,
+        data: {
+          kind: "operation",
+          answer,
+          router,
+          confirmSummary: `${confirm.operation}｜${confirm.user_facing_summary}`,
+          actionTokensLine: tokenLine,
+        },
+      };
     }
-    const topicBlock = formatTopicBlock(router);
+
     const isReport = router.topic === "report_management";
 
     let reportScope: ReportDataScopeResult = {
