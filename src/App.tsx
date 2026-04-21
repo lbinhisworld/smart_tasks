@@ -1,6 +1,6 @@
 /**
  * @fileoverview 应用壳：四页路由（看板 / 报告 / 任务 / 数据中台）、`TaskProvider`。
- * 四页组件**同时挂载**，以 `display` 切换可见，便于在数据看板使用 AI 助手时后台驱动报告解析等逻辑而**不切换整页**。
+ * 四页组件**同时挂载**，以 `display` 切换可见。
  * `OPEN_REPORTS_PAGE_EVENT` 仍将路由切到报告页（用户从看板「跳转原文」等）。
  * `ASSISTANT_UI_ACTION_EVENT` 中导航类令牌不调用 `setPage`。
  *

@@ -185,7 +185,8 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  overflow-x: hidden;
+  /* 人事看板等宽表格/双栏略超一时可横向微滚，避免右侧整块被裁切 */
+  overflow-x: auto;
   overscroll-behavior: contain;
 }
 
@@ -729,12 +730,325 @@ button.linkish:hover {
 }
 
 .home-dash {
-  max-width: 1400px;
+  max-width: min(1400px, 100%);
   margin: 0 auto;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .home-dash-subtabs {
   margin-bottom: 16px;
+}
+
+/* —— 人事看板（人才池） —— */
+.hr-talent-dashboard {
+  max-width: min(1400px, 100%);
+  margin: 0 auto;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hr-talent-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hr-talent-toolbar-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.hr-talent-title {
+  margin: 0 0 6px;
+  font-size: 1.15rem;
+}
+
+.hr-talent-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.hr-talent-body {
+  display: grid;
+  /* 侧栏不超过容器 42% 且 ≤300px，避免窄主区时右栏挤出视口被裁切 */
+  grid-template-columns: minmax(0, 1fr) minmax(0, min(300px, 42%));
+  gap: 16px;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 1024px) {
+  .hr-talent-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hr-talent-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.hr-talent-donuts-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .hr-talent-donuts-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hr-talent-aside {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+  /* 侧栏内容过宽时在栏内滚动，不撑破主列 */
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.hr-talent-kpi-stack {
+  grid-template-columns: 1fr;
+  flex-shrink: 0;
+}
+
+.hr-talent-kpi-stack .kpi-card {
+  padding: 12px 14px;
+}
+
+.hr-talent-chart-card {
+  min-width: 0;
+}
+
+.hr-position-bars-card {
+  margin: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.hr-position-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 72px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.hr-position-bars-card .card-head {
+  flex-shrink: 0;
+}
+
+.hr-position-bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 2.4fr) 2.25rem;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.82rem;
+  min-width: 0;
+}
+
+.hr-position-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.hr-position-bar-track {
+  height: 10px;
+  border-radius: 6px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.hr-position-bar-fill {
+  height: 100%;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #1d6bc6, #38bdf8);
+}
+
+.hr-position-bar-val {
+  text-align: right;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.hr-trend-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.hr-salary-card {
+  margin: 0;
+}
+
+.hr-salary-empty {
+  padding: 12px 0 0;
+}
+
+.hr-salary-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-bottom: 10px;
+}
+
+.hr-salary-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hr-salary-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.hr-salary-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 120px) minmax(0, 1fr) 40px;
+  gap: 10px;
+  align-items: center;
+  font-size: 0.82rem;
+}
+
+.hr-salary-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.hr-salary-stack-track {
+  display: flex;
+  height: 14px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #f1f5f9;
+  min-width: 0;
+}
+
+.hr-salary-stack-seg {
+  min-width: 0;
+  height: 100%;
+}
+
+.hr-salary-row-meta {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.hr-th-static {
+  font-weight: 600;
+}
+
+.hr-trend-card {
+  margin: 0;
+  min-height: 200px;
+}
+
+.hr-trend-empty {
+  padding: 12px 0 0;
+}
+
+.hr-trend-svg-wrap {
+  width: 100%;
+  overflow: hidden;
+}
+
+.hr-trend-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.hr-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 8px;
+  font-size: 0.78rem;
+}
+
+.hr-trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hr-trend-x-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 6px;
+}
+
+.hr-talent-table-card {
+  margin: 0;
+}
+
+.hr-talent-table-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.hr-talent-table-filters .fld {
+  min-width: 200px;
+  max-width: 320px;
+}
+
+.hr-talent-table {
+  font-size: 0.82rem;
+}
+
+.hr-th-sort {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.hr-th-sort:hover {
+  color: var(--primary);
+}
+
+.hr-talent-pager {
+  display: flex;
+  gap: 10px;
+  padding: 10px 0 0;
 }
 
 .dashboard {
