@@ -1,5 +1,5 @@
 /**
- * @fileoverview 首页看板：任务维度（按当前视角、风险、环形图）与报告维度（`ReportDashboardTab`）；报告 Tab 切换时刷新 `loadExtractionHistory`。
+ * @fileoverview 首页看板：任务 / 报告 / 销售 / 人事（人才池）四 Tab；报告 Tab 切换时刷新 `loadExtractionHistory`。
  *
  * @module Dashboard
  */
@@ -16,6 +16,7 @@ import { PendingArrangementSection } from "./PendingArrangementSection";
 import { ReportDashboardTab } from "./ReportDashboardTab";
 import { SalesDashboardTab } from "./SalesDashboardTab";
 import { HomeAiChatPanel } from "./HomeAiChatPanel";
+import { HrTalentDashboardTab } from "./HrTalentDashboardTab";
 
 function monthKey(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -33,9 +34,9 @@ const CATEGORY_META: Record<string, { title: string; subtitle: string }> = {
   "管理作风与赋能类 (Management)": { title: "管理作风与赋能", subtitle: "标准闭环、技能培训与精益标准化" },
 };
 
-type HomeBoardTab = "tasks" | "reports" | "sales";
+type HomeBoardTab = "tasks" | "reports" | "sales" | "hr";
 
-/** 默认落地页「看板」；任务与报告双 Tab。 */
+/** 默认落地页「看板」；任务、报告、销售、人事四 Tab。 */
 export function Dashboard() {
   const { visibleTasks, toggleFollow, user } = useTasks();
   const [homeBoardTab, setHomeBoardTab] = useState<HomeBoardTab>("tasks");
@@ -157,12 +158,23 @@ export function Dashboard() {
         >
           销售看板
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={homeBoardTab === "hr"}
+          className={`report-main-tab${homeBoardTab === "hr" ? " is-active" : ""}`}
+          onClick={() => setHomeBoardTab("hr")}
+        >
+          人事看板
+        </button>
       </div>
 
       {homeBoardTab === "reports" ? (
         <ReportDashboardTab history={filteredReportHistory} perspective={user.perspective} />
       ) : homeBoardTab === "sales" ? (
         <SalesDashboardTab />
+      ) : homeBoardTab === "hr" ? (
+        <HrTalentDashboardTab />
       ) : (
         <div className="dashboard">
       <div className="dash-main">
