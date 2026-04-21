@@ -59,6 +59,17 @@ function receiverDepartmentsText(task: Task): string {
 }
 
 /**
+ * 智能表「类别」列展示：大类 + 子类（与任务模型 `categoryLevel1/2` 一致）。
+ * @param task 任务行
+ */
+function taskCategorySmartsheetText(task: Task): string {
+  const a = task.categoryLevel1?.trim() ?? "";
+  const b = task.categoryLevel2?.trim() ?? "";
+  if (a && b) return `${a} / ${b}`;
+  return a || b || "";
+}
+
+/**
  * 构造智能表格 `add_records` 请求体。
  * 与你在 Apifox 中验证成功的写法对齐：**文本类列用简单字符串**；日期列用毫秒时间戳**字符串**（见[添加记录 Webhook](https://developer.work.weixin.qq.com/document/path/101240)）。
  * 空内容列不写 key，避免占位。
@@ -85,7 +96,7 @@ export function buildSmartsheetAddRecordsBody(task: Task): {
   putStrCol(fid.department, task.department ?? "");
   putStrCol(fid.executingDepartment, task.executingDepartment ?? "");
   putStrCol(fid.receiver, receiverDepartmentsText(task));
-  putStrCol(fid.category, task.category ?? "");
+  putStrCol(fid.category, taskCategorySmartsheetText(task));
   putStrCol(fid.taskMotivation, task.taskMotivation ?? "");
   putStrCol(fid.description, task.description ?? "");
 

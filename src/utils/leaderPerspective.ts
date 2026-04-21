@@ -5,7 +5,7 @@
 import type { ExtractionHistoryItem } from "../types/extractionHistory";
 import type { Task } from "../types/task";
 import { getOrgStructureLines } from "./orgStructureStorage";
-import { pickBranchCompany } from "./extractionHistoryGroup";
+import { resolveBranchLabelForHistoryItem } from "./extractionHistoryGroup";
 
 /** 顶部固定项，与部门架构配置项区分 */
 export const GROUP_LEADER_PERSPECTIVE = "集团领导";
@@ -124,7 +124,10 @@ export function extractionHistoryVisibleForPerspective(
   if (!unit) return true;
   const br = branchRootFromOrgPath(unit);
   if (br !== null) {
-    return pickBranchCompany(item).trim() === br;
+    const itemBranch = resolveBranchLabelForHistoryItem(item).trim();
+    if (itemBranch === br) return true;
+    if (itemBranch !== "暂无" && (itemBranch.includes(br) || br.includes(itemBranch))) return true;
+    return false;
   }
   return true;
 }

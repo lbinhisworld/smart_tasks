@@ -199,6 +199,21 @@ function collectPlanSectionText(pr: Record<string, unknown>, path: string[]): st
   return chunks.join(" ");
 }
 
+/**
+ * 从已解析的日报 JSON 中取出「6.1 需公司协调」类与「6.2 下步计划」类正文，供报告页按分公司生成计划任务。
+ */
+export function extractCoordinationAndNextPlanPlainText(parsed: unknown): {
+  coordinationPlain: string;
+  nextPlanPlain: string;
+} {
+  const pr = getProductionReportRoot(parsed);
+  if (!pr) return { coordinationPlain: "", nextPlanPlain: "" };
+  const hits = collectCoordinationRequests(pr, [], null);
+  const coordinationPlain = hits.map((h) => h.sentence).join("\n");
+  const nextPlanPlain = collectPlanSectionText(pr, []).trim().replace(/\s+/g, " ");
+  return { coordinationPlain, nextPlanPlain };
+}
+
 function normalizeForCompare(s: string): string {
   return s.replace(/\s+/g, "").toLowerCase();
 }

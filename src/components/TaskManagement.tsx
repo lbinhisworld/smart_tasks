@@ -1,7 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CATEGORIES, STATUSES, useTasks } from "../context/TaskContext";
+import { STATUSES, useTasks } from "../context/TaskContext";
+import {
+  getDefaultCategoryPair,
+  level2NamesForLevel1,
+  TASK_CATEGORY_LEVEL1_LIST,
+} from "../data/taskCategories";
 import type { PlanHistorySnapshot } from "../types/planHistory";
-import type { Task, TaskCategory, TaskStatus } from "../types/task";
+import { TaskStatusPill, taskDetailDrawerToolbarModifierClass } from "./TaskStatusPill";
+import {
+  COORDINATION_PARTY_OPTIONS,
+  type Task,
+  type TaskProgressEntry,
+  type TaskStatus,
+} from "../types/task";
 import { formatReportCalendarDateZh } from "../utils/extractionHistoryGroup";
 import {
   branchRootFromOrgPath,
@@ -27,6 +38,7 @@ import {
 } from "../utils/taskDueDate";
 import { requestJumpToExtractionHistory } from "../utils/reportCitation";
 import { getTaskSmartsheetWebhookUrl, pushTaskToSmartsheetOnce } from "../utils/smartsheetTaskPush";
+import { TASK_OPEN_MANUAL_NEW_EVENT } from "../utils/assistantUiActions";
 
 type TaskMgmtTab = "list" | "planHistory";
 
@@ -56,15 +68,19 @@ function defaultExecutingDepartment(unit: string | null, orgLines: string[]): st
 
 function makeEmptyForm(perspective: string, orgLines: string[]) {
   const unit = orgUnitFromPerspective(perspective);
+  const cat = getDefaultCategoryPair();
   return {
     initiator: "",
     department: unit ?? "",
     executingDepartment: defaultExecutingDepartment(unit, orgLines),
-    category: "安全生产" as TaskCategory,
+    categoryLevel1: cat.categoryLevel1,
+    categoryLevel2: cat.categoryLevel2,
     taskMotivation: "",
     description: "",
     expectedCompletion: tomorrowIsoDateLocal(),
     status: "进行中" as TaskStatus,
+    coordinationParty: "",
+    leaderInstruction: "",
     receiversStr: "",
   };
 }
@@ -88,7 +104,22 @@ export function TaskManagement() {
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
   const [planHistorySelectedKeys, setPlanHistorySelectedKeys] = useState<string[]>([]);
   const [smartsheetPushBusyIds, setSmartsheetPushBusyIds] = useState<Set<string>>(() => new Set());
+  const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
+  const [detailDrawerEntered, setDetailDrawerEntered] = useState(false);
   const taskListHeaderCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const detailTask = useMemo(
+    () => (detailTaskId ? visibleTasks.find((t) => t.id === detailTaskId) : undefined),
+    [detailTaskId, visibleTasks],
+  );
+
+  const sortedProgressEntries = useMemo((): TaskProgressEntry[] => {
+    const raw = detailTask?.progressTracking;
+    if (!raw?.length) return [];
+    return [...raw].sort(
+      (a, b) => a.date.localeCompare(b.date) || a.description.localeCompare(b.description),
+    );
+  }, [detailTask?.progressTracking]);
 
   const isGroupPerspective = user.perspective === GROUP_LEADER_PERSPECTIVE;
   const lockedInitiatorUnit = orgUnitFromPerspective(user.perspective);
@@ -97,6 +128,15 @@ export function TaskManagement() {
     const bump = () => setOrgEpoch((n) => n + 1);
     window.addEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
     return () => window.removeEventListener(ORG_STRUCTURE_CHANGED_EVENT, bump);
+  }, []);
+
+  useEffect(() => {
+    const onAssistantOpenManual = () => {
+      setTaskMgmtTab("list");
+      setManualNewTaskOpen(true);
+    };
+    window.addEventListener(TASK_OPEN_MANUAL_NEW_EVENT, onAssistantOpenManual);
+    return () => window.removeEventListener(TASK_OPEN_MANUAL_NEW_EVENT, onAssistantOpenManual);
   }, []);
 
   useEffect(() => {
@@ -117,9 +157,39 @@ export function TaskManagement() {
     if (taskMgmtTab !== "list") {
       setManualNewTaskOpen(false);
       setSelectedTaskIds([]);
+      setDetailTaskId(null);
     }
     if (taskMgmtTab !== "planHistory") setPlanHistorySelectedKeys([]);
   }, [taskMgmtTab]);
+
+  useEffect(() => {
+    if (detailTaskId && !detailTask) setDetailTaskId(null);
+  }, [detailTaskId, detailTask]);
+
+  useEffect(() => {
+    if (!detailTaskId) {
+      setDetailDrawerEntered(false);
+      return;
+    }
+    const id = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => setDetailDrawerEntered(true));
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [detailTaskId]);
+
+  useEffect(() => {
+    if (!detailTaskId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDetailTaskId(null);
+    };
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [detailTaskId]);
 
   useEffect(() => {
     setPlanHistorySelectedKeys((prev) =>
@@ -210,19 +280,30 @@ export function TaskManagement() {
       alert("期待完成须为有效日期或「待定」。");
       return;
     }
+    if (form.status === "卡住待协调" && !form.coordinationParty?.trim()) {
+      alert("处于「卡住待协调」时必须选择协调方。");
+      return;
+    }
     const receiverDepartments = parseReceiverDepartments(form.receiversStr);
     const { branch, workshop } = branchWorkshopFromExecuting(exec);
     addTask({
       initiator: form.initiator.trim(),
       department: form.department.trim(),
       executingDepartment: exec,
-      category: form.category,
+      categoryLevel1: form.categoryLevel1,
+      categoryLevel2: form.categoryLevel2,
       taskMotivation: form.taskMotivation.trim(),
       description: form.description.trim(),
       expectedCompletion: dueRaw,
       status: form.status,
       branch,
       workshop,
+      ...(form.status === "卡住待协调" && form.coordinationParty.trim()
+        ? { coordinationParty: form.coordinationParty.trim() }
+        : {}),
+      ...(form.leaderInstruction?.trim()
+        ? { leaderInstruction: form.leaderInstruction.trim() }
+        : {}),
       ...(receiverDepartments ? { receiverDepartments } : {}),
     });
     setForm(makeEmptyForm(user.perspective, getOrgStructureLines()));
@@ -281,7 +362,10 @@ export function TaskManagement() {
             <button
               type="button"
               className="primary-btn manual-new-task-btn"
-              onClick={() => setManualNewTaskOpen(true)}
+              onClick={() => {
+                setDetailTaskId(null);
+                setManualNewTaskOpen(true);
+              }}
             >
               手工新建任务
             </button>
@@ -309,18 +393,25 @@ export function TaskManagement() {
                 <th>发起部门</th>
                 <th>执行部门</th>
                 <th>接收/配合</th>
-                <th>类别</th>
+                <th>大类</th>
+                <th>子类</th>
                 <th>任务动因</th>
                 <th>描述</th>
                 <th>期待完成</th>
                 <th>状态</th>
+                <th>协调方</th>
+                <th>进度跟踪</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
               {visibleTasks.map((t) => (
-                <tr key={t.id}>
-                  <td className="task-table-col-check">
+                <tr
+                  key={t.id}
+                  className={`task-table-data-row${detailTaskId === t.id ? " is-detail-open" : ""}`}
+                  onClick={() => setDetailTaskId(t.id)}
+                >
+                  <td className="task-table-col-check" onClick={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       checked={selectedTaskIds.includes(t.id)}
@@ -339,26 +430,25 @@ export function TaskManagement() {
                   <td className="muted tiny">
                     {(t.receiverDepartments?.length ? t.receiverDepartments.join("、") : t.receiverDepartment) || "—"}
                   </td>
-                  <td>{t.category}</td>
+                  <td className="muted tiny task-text-wrap">{t.categoryLevel1}</td>
+                  <td className="muted tiny task-text-wrap">{t.categoryLevel2}</td>
                   <td className="task-text-wrap muted tiny">{t.taskMotivation?.trim() || "—"}</td>
                   <td className="task-text-wrap">{t.description}</td>
                   <td>{t.expectedCompletion}</td>
                   <td>
-                    <select
-                      className="inline-select"
-                      value={t.status}
-                      onChange={(e) =>
-                        updateTask(t.id, { status: e.target.value as TaskStatus })
-                      }
-                    >
-                      {STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
+                    <TaskStatusPill status={t.status} />
                   </td>
-                  <td className="actions">
+                  <td className="muted tiny">
+                    {t.status === "卡住待协调"
+                      ? t.coordinationParty?.trim() || "—"
+                      : "—"}
+                  </td>
+                  <td className="muted tiny">
+                    {t.progressTracking?.length
+                      ? `${t.progressTracking.length}条`
+                      : "—"}
+                  </td>
+                  <td className="actions" onClick={(e) => e.stopPropagation()}>
                     {t.smartsheetPushStatus === "failed" ? (
                       <button
                         type="button"
@@ -424,7 +514,7 @@ export function TaskManagement() {
               ))}
               {visibleTasks.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="empty-cell">
+                  <td colSpan={15} className="empty-cell">
                     当前视角下没有可见任务。
                   </td>
                 </tr>
@@ -433,6 +523,124 @@ export function TaskManagement() {
           </table>
         </div>
       </section>
+
+      {detailTask && (
+        <div className="task-detail-drawer-root">
+          <div
+            className={`task-detail-drawer-backdrop${detailDrawerEntered ? " is-visible" : ""}`}
+            role="presentation"
+            aria-hidden="true"
+            onClick={() => setDetailTaskId(null)}
+          />
+          <aside
+            className={`task-detail-drawer-panel${detailDrawerEntered ? " is-visible" : ""}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="task-detail-drawer-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className={`task-detail-drawer-toolbar ${taskDetailDrawerToolbarModifierClass(detailTask.status)}`}
+            >
+              <h2 id="task-detail-drawer-title">{detailTask.status}</h2>
+              <button
+                type="button"
+                className="task-detail-drawer-close"
+                aria-label="关闭"
+                onClick={() => setDetailTaskId(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="task-detail-drawer-body">
+              <dl className="task-detail-dl">
+                <div>
+                  <dt>编号</dt>
+                  <dd className="mono">{detailTask.code}</dd>
+                </div>
+                <div>
+                  <dt>发起人</dt>
+                  <dd>{detailTask.initiator}</dd>
+                </div>
+                <div>
+                  <dt>发起部门</dt>
+                  <dd>{detailTask.department}</dd>
+                </div>
+                <div>
+                  <dt>执行部门</dt>
+                  <dd className="muted tiny">{detailTask.executingDepartment || "—"}</dd>
+                </div>
+                <div>
+                  <dt>接收/配合</dt>
+                  <dd className="muted tiny">
+                    {(detailTask.receiverDepartments?.length
+                      ? detailTask.receiverDepartments.join("、")
+                      : detailTask.receiverDepartment) || "—"}
+                  </dd>
+                </div>
+                <div className="task-detail-dl-full">
+                  <dt>任务大类</dt>
+                  <dd className="task-text-wrap small">{detailTask.categoryLevel1}</dd>
+                </div>
+                <div className="task-detail-dl-full">
+                  <dt>任务子类</dt>
+                  <dd className="task-text-wrap small">{detailTask.categoryLevel2}</dd>
+                </div>
+                <div className="task-detail-dl-full">
+                  <dt>任务动因</dt>
+                  <dd className="task-detail-highlight-card task-text-wrap small">
+                    {detailTask.taskMotivation?.trim() || "—"}
+                  </dd>
+                </div>
+                <div className="task-detail-dl-full">
+                  <dt>任务描述</dt>
+                  <dd className="task-detail-highlight-card task-text-wrap">{detailTask.description}</dd>
+                </div>
+                <div className="task-detail-dl-full">
+                  <dt>领导指示</dt>
+                  <dd className="task-detail-leader-card task-text-wrap small">
+                    {detailTask.leaderInstruction?.trim() || "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>期待完成</dt>
+                  <dd>{detailTask.expectedCompletion}</dd>
+                </div>
+                {detailTask.status === "卡住待协调" && (
+                  <div>
+                    <dt>协调方</dt>
+                    <dd>{detailTask.coordinationParty?.trim() || "—"}</dd>
+                  </div>
+                )}
+              </dl>
+              <section className="task-detail-progress-section" aria-labelledby="task-detail-progress-heading">
+                <h3 id="task-detail-progress-heading" className="task-detail-progress-heading">
+                  进度跟踪
+                </h3>
+                {sortedProgressEntries.length === 0 ? (
+                  <p className="muted small task-detail-progress-empty">
+                    暂无进展记录；可在<strong>报告</strong>页「现有任务进度更新」中根据日报写入。
+                  </p>
+                ) : (
+                  <ul className="task-detail-timeline" aria-label="进度时间线">
+                    {sortedProgressEntries.map((row, idx) => (
+                      <li key={`${row.date}-${idx}-${row.description.slice(0, 24)}`} className="task-detail-timeline-item">
+                        <span className="task-detail-timeline-dot" aria-hidden="true">
+                          ○
+                        </span>
+                        <div className="task-detail-timeline-main">
+                          <div className="task-detail-timeline-date mono">{row.date}</div>
+                          <div className="task-detail-timeline-desc">{row.description}</div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            </div>
+          </aside>
+        </div>
+      )}
 
       {manualNewTaskOpen && (
         <div className="task-new-drawer-root">
@@ -528,13 +736,34 @@ export function TaskManagement() {
                   placeholder="如：财务部，采购部"
                 />
               </label>
-              <label>
-                任务类别
+              <label className="full">
+                任务大类
                 <select
-                  value={form.category}
-                  onChange={(e) => setForm({ ...form, category: e.target.value as TaskCategory })}
+                  value={form.categoryLevel1}
+                  onChange={(e) => {
+                    const l1 = e.target.value;
+                    const l2opts = level2NamesForLevel1(l1);
+                    setForm({
+                      ...form,
+                      categoryLevel1: l1,
+                      categoryLevel2: l2opts.includes(form.categoryLevel2) ? form.categoryLevel2 : (l2opts[0] ?? ""),
+                    });
+                  }}
                 >
-                  {CATEGORIES.map((c) => (
+                  {TASK_CATEGORY_LEVEL1_LIST.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="full">
+                任务子类
+                <select
+                  value={form.categoryLevel2}
+                  onChange={(e) => setForm({ ...form, categoryLevel2: e.target.value })}
+                >
+                  {level2NamesForLevel1(form.categoryLevel1).map((c) => (
                     <option key={c} value={c}>
                       {c}
                     </option>
@@ -557,6 +786,15 @@ export function TaskManagement() {
                   value={form.description}
                   onChange={(e) => setForm({ ...form, description: e.target.value })}
                   placeholder="目标、交付物、关键里程碑等"
+                />
+              </label>
+              <label className="full">
+                领导指示（可选，可由日报计划或进度更新写入）
+                <textarea
+                  rows={2}
+                  value={form.leaderInstruction}
+                  onChange={(e) => setForm({ ...form, leaderInstruction: e.target.value })}
+                  placeholder="领导指示、批示或建议原文摘录"
                 />
               </label>
               <label className="task-due-date-label">
@@ -591,7 +829,19 @@ export function TaskManagement() {
                 状态
                 <select
                   value={form.status}
-                  onChange={(e) => setForm({ ...form, status: e.target.value as TaskStatus })}
+                  onChange={(e) => {
+                    const st = e.target.value as TaskStatus;
+                    setForm((prev) =>
+                      st === "卡住待协调"
+                        ? {
+                            ...prev,
+                            status: st,
+                            coordinationParty:
+                              prev.coordinationParty?.trim() || COORDINATION_PARTY_OPTIONS[0],
+                          }
+                        : { ...prev, status: st, coordinationParty: "" },
+                    );
+                  }}
                 >
                   {STATUSES.map((s) => (
                     <option key={s} value={s}>
@@ -600,6 +850,22 @@ export function TaskManagement() {
                   ))}
                 </select>
               </label>
+              {form.status === "卡住待协调" && (
+                <label className="full">
+                  协调方
+                  <select
+                    value={form.coordinationParty || COORDINATION_PARTY_OPTIONS[0]}
+                    onChange={(e) => setForm({ ...form, coordinationParty: e.target.value })}
+                    required
+                  >
+                    {COORDINATION_PARTY_OPTIONS.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <div className="form-actions full">
                 <button type="button" className="ghost-btn" onClick={() => setManualNewTaskOpen(false)}>
                   取消
@@ -839,6 +1105,9 @@ function EditForm({
     reconcileTaskStatusByDueDate({
       ...task,
       taskMotivation: task.taskMotivation?.trim() ?? "",
+      progressTracking: [...(task.progressTracking ?? [])],
+      coordinationParty: task.coordinationParty ?? "",
+      leaderInstruction: task.leaderInstruction ?? "",
     }),
   );
   const [receiversStr, setReceiversStr] = useState(() =>
@@ -884,13 +1153,18 @@ function EditForm({
           alert("期待完成须为有效日期或「待定」。");
           return;
         }
+        if (draft.status === "卡住待协调" && !draft.coordinationParty?.trim()) {
+          alert("处于「卡住待协调」时必须选择协调方。");
+          return;
+        }
         const receiverDepartments = parseReceiverDepartments(receiversStr) ?? [];
         const { branch, workshop } = branchWorkshopFromExecuting(exec);
         onSave({
           initiator: draft.initiator,
           department: draft.department.trim(),
           executingDepartment: exec,
-          category: draft.category,
+          categoryLevel1: draft.categoryLevel1,
+          categoryLevel2: draft.categoryLevel2,
           taskMotivation: draft.taskMotivation?.trim() ?? "",
           description: draft.description,
           expectedCompletion: dueRaw,
@@ -899,6 +1173,15 @@ function EditForm({
           workshop,
           receiverDepartments,
           receiverDepartment: undefined,
+          ...(draft.status === "卡住待协调" && draft.coordinationParty?.trim()
+            ? { coordinationParty: draft.coordinationParty.trim() }
+            : { coordinationParty: undefined }),
+          ...(draft.leaderInstruction?.trim()
+            ? { leaderInstruction: draft.leaderInstruction.trim() }
+            : { leaderInstruction: undefined }),
+          ...(draft.progressTracking?.length
+            ? { progressTracking: [...draft.progressTracking] }
+            : { progressTracking: undefined }),
         });
       }}
     >
@@ -965,13 +1248,34 @@ function EditForm({
           placeholder="留空表示无"
         />
       </label>
-      <label>
-        任务类别
+      <label className="full">
+        任务大类
         <select
-          value={draft.category}
-          onChange={(e) => setDraft({ ...draft, category: e.target.value as TaskCategory })}
+          value={draft.categoryLevel1}
+          onChange={(e) => {
+            const l1 = e.target.value;
+            const l2opts = level2NamesForLevel1(l1);
+            setDraft({
+              ...draft,
+              categoryLevel1: l1,
+              categoryLevel2: l2opts.includes(draft.categoryLevel2) ? draft.categoryLevel2 : (l2opts[0] ?? ""),
+            });
+          }}
         >
-          {CATEGORIES.map((c) => (
+          {TASK_CATEGORY_LEVEL1_LIST.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="full">
+        任务子类
+        <select
+          value={draft.categoryLevel2}
+          onChange={(e) => setDraft({ ...draft, categoryLevel2: e.target.value })}
+        >
+          {level2NamesForLevel1(draft.categoryLevel1).map((c) => (
             <option key={c} value={c}>
               {c}
             </option>
@@ -993,6 +1297,15 @@ function EditForm({
           rows={3}
           value={draft.description}
           onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+        />
+      </label>
+      <label className="full">
+        领导指示（可选）
+        <textarea
+          rows={2}
+          value={draft.leaderInstruction}
+          onChange={(e) => setDraft({ ...draft, leaderInstruction: e.target.value })}
+          placeholder="可由日报计划或报告进度更新自动写入，也可手改"
         />
       </label>
       <label className="task-due-date-label">
@@ -1027,7 +1340,19 @@ function EditForm({
         状态
         <select
           value={draft.status}
-          onChange={(e) => setDraft({ ...draft, status: e.target.value as TaskStatus })}
+          onChange={(e) => {
+            const st = e.target.value as TaskStatus;
+            setDraft((prev) =>
+              st === "卡住待协调"
+                ? {
+                    ...prev,
+                    status: st,
+                    coordinationParty:
+                      prev.coordinationParty?.trim() || COORDINATION_PARTY_OPTIONS[0],
+                  }
+                : { ...prev, status: st, coordinationParty: "" },
+            );
+          }}
         >
           {STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -1036,6 +1361,51 @@ function EditForm({
           ))}
         </select>
       </label>
+      {draft.status === "卡住待协调" && (
+        <label className="full">
+          协调方
+          <select
+            value={draft.coordinationParty || COORDINATION_PARTY_OPTIONS[0]}
+            onChange={(e) => setDraft({ ...draft, coordinationParty: e.target.value })}
+            required
+          >
+            {COORDINATION_PARTY_OPTIONS.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <div className="full task-progress-tracking-section">
+        <div className="task-progress-tracking-heading">进度跟踪</div>
+        {!draft.progressTracking?.length ? (
+          <p className="muted small task-progress-tracking-empty">
+            暂无进展记录；可在<strong>报告</strong>页「现有任务进度更新」中根据日报写入。
+          </p>
+        ) : (
+          <div className="table-wrap task-progress-tracking-table-wrap">
+            <table className="data-table task-progress-tracking-table">
+              <thead>
+                <tr>
+                  <th className="task-progress-tracking-col-date">日期</th>
+                  <th>进展描述</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...draft.progressTracking]
+                  .sort((a, b) => a.date.localeCompare(b.date) || a.description.localeCompare(b.description))
+                  .map((row, idx) => (
+                    <tr key={`${row.date}-${idx}-${row.description.slice(0, 12)}`}>
+                      <td className="mono task-progress-tracking-col-date">{row.date}</td>
+                      <td className="task-text-wrap">{row.description}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
       <div className="form-actions full">
         <button type="button" className="ghost-btn" onClick={onClose}>
           取消

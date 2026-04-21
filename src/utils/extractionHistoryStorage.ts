@@ -21,6 +21,7 @@ import {
   PENDING_AI_SUGGESTION_TEMPLATE,
 } from "./buildPendingTasksFromSavedReport";
 import { pickExtractionDate } from "./extractionHistoryGroup";
+import { rebuildReportDynamicMemoryFromHistory } from "./reportDynamicMemory";
 
 const STORAGE_KEY = "qifeng_extraction_history_v1";
 /** 本地保存条数上限（追加与导入均适用） */
@@ -323,6 +324,7 @@ export function loadExtractionHistory(): ExtractionHistoryItem[] {
     if (changed) {
       const next = mapped.slice(0, MAX_HISTORY_ITEMS);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      rebuildReportDynamicMemoryFromHistory(next);
       return next;
     }
     return mapped;
@@ -339,6 +341,7 @@ export function appendExtractionHistory(item: ExtractionHistoryItem): Extraction
   const prev = loadExtractionHistory();
   const next = [item, ...prev].slice(0, MAX_HISTORY_ITEMS);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  rebuildReportDynamicMemoryFromHistory(next);
   return next;
 }
 
@@ -346,6 +349,7 @@ export function appendExtractionHistory(item: ExtractionHistoryItem): Extraction
 export function removeExtractionHistoryItem(id: string): ExtractionHistoryItem[] {
   const next = loadExtractionHistory().filter((x) => x.id !== id);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  rebuildReportDynamicMemoryFromHistory(next);
   return next;
 }
 
@@ -356,5 +360,6 @@ export function removeExtractionHistoryItem(id: string): ExtractionHistoryItem[]
 export function replaceExtractionHistory(items: ExtractionHistoryItem[]): ExtractionHistoryItem[] {
   const next = items.slice(0, MAX_HISTORY_ITEMS);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  rebuildReportDynamicMemoryFromHistory(next);
   return next;
 }

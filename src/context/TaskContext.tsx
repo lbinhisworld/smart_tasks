@@ -17,24 +17,67 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import {
+  coerceTaskCategoryPair,
+  getDefaultCategoryPair,
+  LEGACY_FLAT_CATEGORY_MAP,
+} from "../data/taskCategories";
 import { SEED_TASKS } from "../data/seedTasks";
 import {
   GROUP_LEADER_PERSPECTIVE,
   isBranchCompanyUnit,
   taskVisibleForPerspective,
 } from "../utils/leaderPerspective";
-import type { CurrentUser, Task, TaskCategory, TaskStatus } from "../types/task";
+import { loadExtractionHistory } from "../utils/extractionHistoryStorage";
+import { rebuildReportDynamicMemoryFromHistory } from "../utils/reportDynamicMemory";
+import { syncTaskDynamicMemoryFromTasks } from "../utils/taskDynamicMemory";
+import { buildAutoTaskCode } from "../utils/taskCode";
+import {
+  type CurrentUser,
+  normalizeTaskStatusField,
+  type Task,
+  type TaskProgressEntry,
+  type TaskStatus,
+} from "../types/task";
 import { reconcileTaskStatusByDueDate } from "../utils/taskDueDate";
 import { schedulePushNewTaskToSmartsheet } from "../utils/smartsheetTaskPush";
 
 const STORAGE_KEY = "qifeng_smart_tasks_v1";
 const USER_KEY = "qifeng_smart_tasks_user_v1";
 
-/** 旧版「实质性进展」并入「进行中」，再由期待完成日归并「已超时」。 */
-function migrateStoredTaskStatus(raw: unknown): TaskStatus {
-  if (raw === "实质性进展") return "进行中";
-  if (raw === "进行中" || raw === "已完成" || raw === "已超时") return raw;
-  return "进行中";
+function normalizeProgressTracking(raw: unknown): TaskProgressEntry[] | undefined {
+  if (raw == null) return undefined;
+  if (!Array.isArray(raw)) return undefined;
+  const out: TaskProgressEntry[] = [];
+  for (const el of raw) {
+    if (!el || typeof el !== "object") continue;
+    const o = el as Record<string, unknown>;
+    const date = o.date;
+    const description = o.description;
+    if (typeof date !== "string" || typeof description !== "string") continue;
+    const d = date.trim();
+    const desc = description.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !desc) continue;
+    out.push({ date: d, description: desc });
+  }
+  return out.length ? out : undefined;
+}
+
+function normalizeTaskCategories(raw: Task & { category?: string }): {
+  categoryLevel1: string;
+  categoryLevel2: string;
+} {
+  const any = raw as Task & { category?: string; categoryLevel1?: string; categoryLevel2?: string };
+  const l1 = any.categoryLevel1?.trim() ?? "";
+  const l2 = any.categoryLevel2?.trim() ?? "";
+  if (l1 && l2) return coerceTaskCategoryPair(l1, l2);
+  const leg = any.category?.trim();
+  if (leg && LEGACY_FLAT_CATEGORY_MAP[leg]) {
+    const m = LEGACY_FLAT_CATEGORY_MAP[leg];
+    return coerceTaskCategoryPair(m.categoryLevel1, m.categoryLevel2);
+  }
+  if (l1 || l2) return coerceTaskCategoryPair(l1, l2);
+  return getDefaultCategoryPair();
 }
 
 function normalizeStoredTask(t: Task): Task {
@@ -57,14 +100,43 @@ function normalizeStoredTask(t: Task): Task {
     typeof (t as { taskMotivation?: unknown }).taskMotivation === "string"
       ? (t as { taskMotivation: string }).taskMotivation.trim()
       : "";
-  const status = migrateStoredTaskStatus(t.status);
+  const progressTracking = normalizeProgressTracking(
+    (t as { progressTracking?: unknown }).progressTracking,
+  );
+  const row = t as Task & { category?: string };
+  const {
+    category: _legacyCategory,
+    coordinationParty: _cpIn,
+    leaderInstruction: _liIn,
+    ...rest
+  } = row;
+  const cats = normalizeTaskCategories(row);
+  const status = normalizeTaskStatusField(row.status);
+  const cpRaw =
+    typeof (row as { coordinationParty?: unknown }).coordinationParty === "string"
+      ? (row as { coordinationParty: string }).coordinationParty.trim()
+      : "";
+  const coordinationParty = status === "卡住待协调" && cpRaw ? cpRaw : undefined;
+  const leaderInstruction =
+    typeof _liIn === "string" && _liIn.trim() ? _liIn.trim() : undefined;
+
+  const smartsheetPushStatus = row.smartsheetPushStatus;
+  const smartsheetPushError = row.smartsheetPushError;
+
   return reconcileTaskStatusByDueDate({
-    ...t,
+    ...rest,
     executingDepartment: execRaw,
     branch,
     workshop,
     taskMotivation,
     status,
+    categoryLevel1: cats.categoryLevel1,
+    categoryLevel2: cats.categoryLevel2,
+    ...(coordinationParty ? { coordinationParty } : {}),
+    ...(leaderInstruction ? { leaderInstruction } : {}),
+    ...(progressTracking ? { progressTracking } : {}),
+    ...(smartsheetPushStatus ? { smartsheetPushStatus } : {}),
+    ...(smartsheetPushError ? { smartsheetPushError } : {}),
   });
 }
 
@@ -131,6 +203,14 @@ export function TaskProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
   }, [tasks]);
 
+  useEffect(() => {
+    syncTaskDynamicMemoryFromTasks(tasks);
+  }, [tasks]);
+
+  useEffect(() => {
+    rebuildReportDynamicMemoryFromHistory(loadExtractionHistory());
+  }, []);
+
   const setUser = useCallback((u: CurrentUser) => {
     setUserState(u);
     localStorage.setItem(USER_KEY, JSON.stringify(u));
@@ -157,21 +237,24 @@ export function TaskProvider({ children }: { children: ReactNode }) {
       },
     ): Task => {
       const id = `t_${Date.now()}`;
-      const deptKey = (input.department?.trim() || "集").slice(0, 2);
-      const execKey = (input.executingDepartment?.trim() || "执").slice(0, 2);
-      const code =
-        input.code ?? `QF-${deptKey}-${execKey}-${String(tasks.length + 1).padStart(3, "0")}`;
-      const row = reconcileTaskStatusByDueDate({
-        ...input,
-        id,
-        code,
-        createdAt: new Date().toISOString().slice(0, 10),
+      const createdAt = new Date().toISOString().slice(0, 10);
+      let row!: Task;
+      setTasks((prev) => {
+        const code =
+          input.code ??
+          buildAutoTaskCode(input.department ?? "", input.categoryLevel1 ?? "", prev);
+        row = reconcileTaskStatusByDueDate({
+          ...input,
+          id,
+          code,
+          createdAt,
+        });
+        return [row, ...prev];
       });
-      setTasks((prev) => [row, ...prev]);
       schedulePushNewTaskToSmartsheet(row, updateTask);
       return row;
     },
-    [tasks.length, updateTask],
+    [updateTask],
   );
 
   const toggleFollow = useCallback((id: string) => {
@@ -195,16 +278,7 @@ export function TaskProvider({ children }: { children: ReactNode }) {
       removeTask,
       toggleFollow,
     }),
-    [
-      tasks,
-      visibleTasks,
-      user,
-      setUser,
-      addTask,
-      updateTask,
-      removeTask,
-      toggleFollow,
-    ],
+    [tasks, visibleTasks, user, setUser, addTask, updateTask, removeTask, toggleFollow],
   );
 
   return <TaskContext.Provider value={value}>{children}</TaskContext.Provider>;
@@ -216,5 +290,11 @@ export function useTasks() {
   return ctx;
 }
 
-export const CATEGORIES: TaskCategory[] = ["安全生产", "技改项目", "质量与环保"];
-export const STATUSES: TaskStatus[] = ["进行中", "已完成", "已超时"];
+/** 任务列表状态选项（含由日期自动归并的「已超时」） */
+export const STATUSES: TaskStatus[] = [
+  "进行中",
+  "实质性进展",
+  "已超时",
+  "卡住待协调",
+  "已完成",
+];

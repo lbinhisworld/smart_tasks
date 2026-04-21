@@ -35,7 +35,7 @@ export function tomorrowIsoDateLocal(): string {
  * 用于读库、保存后统一口径（与列表、推送一致）。
  */
 export function reconcileTaskStatusByDueDate(t: Task): Task {
-  if (t.status === "已完成") return t;
+  if (t.status === "已完成" || t.status === "卡住待协调") return t;
   const due = t.expectedCompletion?.trim() ?? "";
   const isPending = !due || due === PENDING_EXPECTED_COMPLETION;
   if (!isIsoDateString(due) || isPending) {
@@ -44,7 +44,10 @@ export function reconcileTaskStatusByDueDate(t: Task): Task {
   }
   const today = todayIsoDateLocal();
   if (due < today) {
-    return { ...t, status: "已超时" as TaskStatus };
+    if (t.status === "进行中" || t.status === "实质性进展") {
+      return { ...t, status: "已超时" as TaskStatus };
+    }
+    return t;
   }
   if (t.status === "已超时") return { ...t, status: "进行中" };
   return t;
