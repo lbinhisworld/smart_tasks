@@ -64,6 +64,7 @@ export function Dashboard() {
     const total = visibleTasks.length;
     const done = visibleTasks.filter((t) => t.status === "已完成").length;
     const going = visibleTasks.filter((t) => t.status === "进行中").length;
+    const overdueAll = visibleTasks.filter((t) => t.status === "已超时").length;
     const nodes = visibleTasks.filter((t) => inMonth(t.expectedCompletion, reportMonth));
     const nodesDone = nodes.filter((t) => t.status === "已完成").length;
     const today = new Date();
@@ -73,7 +74,7 @@ export function Dashboard() {
         isIsoDateString(t.expectedCompletion) &&
         new Date(t.expectedCompletion) < today,
     ).length;
-    return { total, done, going, nodes: nodes.length, nodesDone, delayed };
+    return { total, done, going, overdueAll, nodes: nodes.length, nodesDone, delayed };
   }, [visibleTasks, reportMonth]);
 
   const riskBuckets = useMemo(() => {
@@ -113,9 +114,9 @@ export function Dashboard() {
   const byCategory = (cat: TaskCategory) => {
     const subset = visibleTasks.filter((t) => t.category === cat);
     const completed = subset.filter((t) => t.status === "已完成").length;
-    const solid = subset.filter((t) => t.status === "实质性进展").length;
+    const overdue = subset.filter((t) => t.status === "已超时").length;
     const ongoing = subset.filter((t) => t.status === "进行中").length;
-    return { subset, completed, solid, ongoing };
+    return { subset, completed, overdue, ongoing };
   };
 
   return (
@@ -169,6 +170,9 @@ export function Dashboard() {
                 </span>
                 <span>
                   <i className="dot b" /> 进行中 {kpis.going}
+                </span>
+                <span>
+                  <i className="dot r" /> 已超时 {kpis.overdueAll}
                 </span>
               </div>
             </div>
@@ -286,7 +290,7 @@ export function Dashboard() {
         <section className="category-row">
           {(Object.keys(CATEGORY_META) as TaskCategory[]).map((cat) => {
             const meta = CATEGORY_META[cat];
-            const { subset, completed, solid, ongoing } = byCategory(cat);
+            const { subset, completed, overdue, ongoing } = byCategory(cat);
             return (
               <div key={cat} className="card cat-card">
                 <div className="card-head tight">
@@ -312,7 +316,7 @@ export function Dashboard() {
                 <Donut
                   segments={[
                     { label: "已完成", value: completed, color: "#0d9f6e" },
-                    { label: "实质性进展", value: solid, color: "#d4a012" },
+                    { label: "已超时", value: overdue, color: "#c2410c" },
                     { label: "进行中", value: ongoing, color: "#1d6bc6" },
                   ]}
                 />

@@ -10,6 +10,12 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       proxy: {
+        /** 企业微信文档智能表格 Webhook（开发环境绕过浏览器 CORS） */
+        "/api/qy-wedoc": {
+          target: "https://qyapi.weixin.qq.com",
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/qy-wedoc/, "") || "/",
+        },
         "/api/deepseek": {
           target: "https://api.deepseek.com",
           changeOrigin: true,

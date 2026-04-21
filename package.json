@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "smartsheet:test-webhook": "node scripts/push-smartsheet-webhook-test.mjs"
   },
   "dependencies": {
     "mammoth": "^1.9.0",

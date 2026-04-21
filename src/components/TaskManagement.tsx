@@ -19,8 +19,14 @@ import {
   restorePlanHistoryRowFromPendingPlan,
   restorePlanHistoryRowsFromPendingPlanBatch,
 } from "../utils/planHistoryStorage";
-import { isIsoDateString, PENDING_EXPECTED_COMPLETION } from "../utils/taskDueDate";
+import {
+  isIsoDateString,
+  PENDING_EXPECTED_COMPLETION,
+  reconcileTaskStatusByDueDate,
+  tomorrowIsoDateLocal,
+} from "../utils/taskDueDate";
 import { requestJumpToExtractionHistory } from "../utils/reportCitation";
+import { getTaskSmartsheetWebhookUrl, pushTaskToSmartsheetOnce } from "../utils/smartsheetTaskPush";
 
 type TaskMgmtTab = "list" | "planHistory";
 
@@ -57,7 +63,7 @@ function makeEmptyForm(perspective: string, orgLines: string[]) {
     category: "安全生产" as TaskCategory,
     taskMotivation: "",
     description: "",
-    expectedCompletion: "",
+    expectedCompletion: tomorrowIsoDateLocal(),
     status: "进行中" as TaskStatus,
     receiversStr: "",
   };
@@ -81,6 +87,7 @@ export function TaskManagement() {
   const [manualNewTaskEntered, setManualNewTaskEntered] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
   const [planHistorySelectedKeys, setPlanHistorySelectedKeys] = useState<string[]>([]);
+  const [smartsheetPushBusyIds, setSmartsheetPushBusyIds] = useState<Set<string>>(() => new Set());
   const taskListHeaderCheckboxRef = useRef<HTMLInputElement>(null);
 
   const isGroupPerspective = user.perspective === GROUP_LEADER_PERSPECTIVE;
@@ -196,11 +203,11 @@ export function TaskManagement() {
     }
     const dueRaw = form.expectedCompletion.trim();
     if (!dueRaw) {
-      alert("请填写期待完成时间（YYYY-MM-DD）或「待定」。");
+      alert("请选择期待完成日期，或点击「设为待定」。");
       return;
     }
     if (!isIsoDateString(dueRaw) && dueRaw !== PENDING_EXPECTED_COMPLETION) {
-      alert("期待完成请填写 YYYY-MM-DD 或「待定」。");
+      alert("期待完成须为有效日期或「待定」。");
       return;
     }
     const receiverDepartments = parseReceiverDepartments(form.receiversStr);
@@ -307,7 +314,7 @@ export function TaskManagement() {
                 <th>描述</th>
                 <th>期待完成</th>
                 <th>状态</th>
-                <th />
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -352,6 +359,47 @@ export function TaskManagement() {
                     </select>
                   </td>
                   <td className="actions">
+                    {t.smartsheetPushStatus === "failed" ? (
+                      <button
+                        type="button"
+                        className="text-btn"
+                        disabled={smartsheetPushBusyIds.has(t.id)}
+                        title={t.smartsheetPushError ?? "推送智能表格失败，点击重试"}
+                        onClick={() => {
+                          if (!getTaskSmartsheetWebhookUrl()) {
+                            alert(
+                              "请先在顶部「设置」→「智能表格推送」中，为「任务督办（业务标识 task）」填写 Webhook URL 并保存。",
+                            );
+                            return;
+                          }
+                          setSmartsheetPushBusyIds((prev) => new Set(prev).add(t.id));
+                          void (async () => {
+                            try {
+                              await pushTaskToSmartsheetOnce(t);
+                              updateTask(t.id, {
+                                smartsheetPushStatus: "success",
+                                smartsheetPushError: undefined,
+                              });
+                            } catch (e) {
+                              const msg = e instanceof Error ? e.message : String(e);
+                              updateTask(t.id, {
+                                smartsheetPushStatus: "failed",
+                                smartsheetPushError: msg.slice(0, 1200),
+                              });
+                              alert(`推送失败：${msg}`);
+                            } finally {
+                              setSmartsheetPushBusyIds((prev) => {
+                                const next = new Set(prev);
+                                next.delete(t.id);
+                                return next;
+                              });
+                            }
+                          })();
+                        }}
+                      >
+                        {smartsheetPushBusyIds.has(t.id) ? "推送中…" : "推送智能表"}
+                      </button>
+                    ) : null}
                     <button type="button" className="text-btn" onClick={() => toggleFollow(t.id)}>
                       {t.followedByUser ? "已关注" : "关注"}
                     </button>
@@ -511,16 +559,33 @@ export function TaskManagement() {
                   placeholder="目标、交付物、关键里程碑等"
                 />
               </label>
-              <label>
-                期待完成时间
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  placeholder="YYYY-MM-DD 或 待定"
-                  value={form.expectedCompletion}
-                  onChange={(e) => setForm({ ...form, expectedCompletion: e.target.value })}
-                />
+              <label className="task-due-date-label">
+                <span>期待完成时间</span>
+                <div className="task-due-date-row">
+                  <input
+                    type="date"
+                    className="fld"
+                    autoComplete="off"
+                    value={isIsoDateString(form.expectedCompletion) ? form.expectedCompletion : ""}
+                    onChange={(e) => {
+                      const v = e.target.value.trim();
+                      setForm({
+                        ...form,
+                        expectedCompletion: v ? v : PENDING_EXPECTED_COMPLETION,
+                      });
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="ghost-btn tiny-btn"
+                    onClick={() => setForm({ ...form, expectedCompletion: PENDING_EXPECTED_COMPLETION })}
+                  >
+                    设为待定
+                  </button>
+                </div>
+                {form.expectedCompletion === PENDING_EXPECTED_COMPLETION ? (
+                  <span className="muted tiny task-due-pending-note">当前为「待定」（未选具体日期）</span>
+                ) : null}
               </label>
               <label>
                 状态
@@ -770,10 +835,12 @@ function EditForm({
   onSave: (patch: Partial<Task>) => void;
   onClose: () => void;
 }) {
-  const [draft, setDraft] = useState(() => ({
-    ...task,
-    taskMotivation: task.taskMotivation?.trim() ?? "",
-  }));
+  const [draft, setDraft] = useState(() =>
+    reconcileTaskStatusByDueDate({
+      ...task,
+      taskMotivation: task.taskMotivation?.trim() ?? "",
+    }),
+  );
   const [receiversStr, setReceiversStr] = useState(() =>
     task.receiverDepartments?.length
       ? task.receiverDepartments.join("，")
@@ -810,11 +877,11 @@ function EditForm({
         }
         const dueRaw = draft.expectedCompletion.trim();
         if (!dueRaw) {
-          alert("请填写期待完成时间（YYYY-MM-DD）或「待定」。");
+          alert("请选择期待完成日期，或点击「设为待定」。");
           return;
         }
         if (!isIsoDateString(dueRaw) && dueRaw !== PENDING_EXPECTED_COMPLETION) {
-          alert("期待完成请填写 YYYY-MM-DD 或「待定」。");
+          alert("期待完成须为有效日期或「待定」。");
           return;
         }
         const receiverDepartments = parseReceiverDepartments(receiversStr) ?? [];
@@ -928,16 +995,33 @@ function EditForm({
           onChange={(e) => setDraft({ ...draft, description: e.target.value })}
         />
       </label>
-      <label>
-        期待完成时间
-        <input
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          placeholder="YYYY-MM-DD 或 待定"
-          value={draft.expectedCompletion}
-          onChange={(e) => setDraft({ ...draft, expectedCompletion: e.target.value })}
-        />
+      <label className="task-due-date-label">
+        <span>期待完成时间</span>
+        <div className="task-due-date-row">
+          <input
+            type="date"
+            className="fld"
+            autoComplete="off"
+            value={isIsoDateString(draft.expectedCompletion) ? draft.expectedCompletion : ""}
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              setDraft({
+                ...draft,
+                expectedCompletion: v ? v : PENDING_EXPECTED_COMPLETION,
+              });
+            }}
+          />
+          <button
+            type="button"
+            className="ghost-btn tiny-btn"
+            onClick={() => setDraft({ ...draft, expectedCompletion: PENDING_EXPECTED_COMPLETION })}
+          >
+            设为待定
+          </button>
+        </div>
+        {draft.expectedCompletion === PENDING_EXPECTED_COMPLETION ? (
+          <span className="muted tiny task-due-pending-note">当前为「待定」</span>
+        ) : null}
       </label>
       <label>
         状态

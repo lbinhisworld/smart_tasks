@@ -1469,6 +1469,28 @@ button.pending-date-to-report:hover {
   min-height: 0;
 }
 
+.task-due-date-label > span {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.task-due-date-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-due-date-row .fld[type="date"] {
+  min-width: 160px;
+  max-width: 100%;
+}
+
+.task-due-pending-note {
+  display: block;
+  margin-top: 4px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .task-new-drawer-backdrop,
   .task-new-drawer-panel {
@@ -1758,6 +1780,102 @@ button.pending-date-to-report:hover {
 
 .app-config-intro {
   margin-top: 0;
+}
+
+.app-config-webhooks-table-wrap {
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+.app-config-webhooks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.app-config-webhooks-table th,
+.app-config-webhooks-table td {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  vertical-align: middle;
+  text-align: left;
+}
+
+.app-config-webhooks-table th {
+  background: #f8fafc;
+  font-weight: 600;
+  color: #334155;
+}
+
+.app-config-webhooks-table .fld {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.app-config-webhooks-meta {
+  color: var(--muted);
+  font-size: 0.8rem;
+  max-width: 200px;
+}
+
+.app-config-webhooks-col-act {
+  white-space: nowrap;
+  width: 72px;
+}
+
+.app-config-webhooks-actions-row {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.app-config-field-ids-details {
+  margin: 14px 0;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.app-config-field-ids-summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: #0f172a;
+}
+
+.app-config-field-ids-intro {
+  margin: 8px 0 10px;
+  line-height: 1.45;
+}
+
+.app-config-field-ids-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) 1fr;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+@media (max-width: 560px) {
+  .app-config-field-ids-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.app-config-field-id-row {
+  display: contents;
+}
+
+.app-config-field-id-label {
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.app-config-field-ids-toolbar {
+  margin-top: 10px;
 }
 
 .org-structure-label {

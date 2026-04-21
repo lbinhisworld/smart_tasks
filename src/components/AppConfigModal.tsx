@@ -7,8 +7,22 @@ import {
 } from "../utils/llmExtract";
 import { parseOrgStructureUserInput } from "../utils/orgStructureInput";
 import { getOrgStructureText, setOrgStructureText } from "../utils/orgStructureStorage";
+import {
+  getSmartsheetWebhookRowsForEditor,
+  saveSmartsheetWebhookRowsFromEditor,
+  SMARTSHEET_WEBHOOK_PURPOSE_LABELS,
+  SMARTSHEET_WEBHOOK_PURPOSE_TASK,
+} from "../utils/smartsheetWebhooksStorage";
+import {
+  loadTaskSmartsheetFieldIds,
+  resetTaskSmartsheetFieldIdsToDefaults,
+  saveTaskSmartsheetFieldIds,
+  TASK_SMARTSHEET_FIELD_KEYS,
+  TASK_SMARTSHEET_FIELD_LABELS,
+  type TaskSmartsheetFieldKey,
+} from "../utils/smartsheetTaskFieldIdsStorage";
 
-type ConfigTab = "llm" | "org";
+type ConfigTab = "llm" | "org" | "smartsheet";
 
 export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { setUser } = useTasks();
@@ -17,17 +31,27 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
   const [llmHint, setLlmHint] = useState<string | null>(null);
   const [orgText, setOrgText] = useState("");
   const [orgHint, setOrgHint] = useState<string | null>(null);
+  const [webhookRows, setWebhookRows] = useState<{ key: string; url: string }[]>(() =>
+    getSmartsheetWebhookRowsForEditor(),
+  );
+  const [taskFieldIds, setTaskFieldIds] = useState<Record<TaskSmartsheetFieldKey, string>>(() =>
+    loadTaskSmartsheetFieldIds(),
+  );
+  const [smartsheetHint, setSmartsheetHint] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setTab("llm");
     setOrgHint(null);
+    setSmartsheetHint(null);
     const existing = getStoredDeepseekApiKey();
     setApiKey(existing ?? "");
     setLlmHint(
       existing ? `当前已保存 Key（末尾 ${existing.slice(-4)}），可覆盖或清除。` : null,
     );
     setOrgText(getOrgStructureText());
+    setWebhookRows(getSmartsheetWebhookRowsForEditor());
+    setTaskFieldIds(loadTaskSmartsheetFieldIds());
   }, [open]);
 
   if (!open) return null;
@@ -41,6 +65,22 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
     }
     setStoredDeepseekApiKey(t);
     onClose();
+  }
+
+  function saveSmartsheet() {
+    const err = saveSmartsheetWebhookRowsFromEditor(webhookRows);
+    if (err) {
+      alert(err);
+      return;
+    }
+    const errIds = saveTaskSmartsheetFieldIds(taskFieldIds);
+    if (errIds) {
+      alert(errIds);
+      return;
+    }
+    setSmartsheetHint(
+      "已保存 Webhook 与各列字段 id（仅本机浏览器）。新建任务保存后会自动向 task 对应地址推送；控制台可查看「[smartsheet] 开始推送」日志。",
+    );
   }
 
   function saveOrg() {
@@ -106,6 +146,15 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
             onClick={() => setTab("org")}
           >
             部门架构
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "smartsheet"}
+            className={`app-config-tab${tab === "smartsheet" ? " is-active" : ""}`}
+            onClick={() => setTab("smartsheet")}
+          >
+            智能表格推送
           </button>
         </div>
 
@@ -174,6 +223,162 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
               {orgHint && <p className="report-hint">{orgHint}</p>}
               <div className="llm-modal-actions">
                 <button type="button" className="primary-btn" onClick={saveOrg}>
+                  保存
+                </button>
+              </div>
+            </div>
+          )}
+
+          {tab === "smartsheet" && (
+            <div className="app-config-panel" role="tabpanel">
+              <p className="muted small app-config-intro">
+                不同<strong>业务数据</strong>可对应<strong>不同</strong>的智能表格 Webhook。每行一条：「业务标识」用于程序内区分（须唯一），「Webhook
+                URL」为企业微信文档提供的<strong>完整地址</strong>（含 <code>key=</code>）。仅保存在本机 <code>localStorage</code>。
+                开发环境（<code>npm run dev</code>）经 Vite 代理 <code>/api/qy-wedoc</code> 转发至{" "}
+                <code>qyapi.weixin.qq.com</code>；生产建议同源后端转发。若推送报错 <code>Smartsheet field not found</code>
+                ，说明下列「列字段 id」与当前智能表格列不一致，请在企业微信文档 / 开发者工具中核对后修改并保存。
+              </p>
+              {smartsheetHint && <p className="report-hint">{smartsheetHint}</p>}
+              <details className="app-config-field-ids-details" open>
+                <summary className="app-config-field-ids-summary">任务推送：智能表格列字段 id</summary>
+                <p className="muted small app-config-field-ids-intro">
+                  每张智能表格的列 id 须与<strong>该 Webhook「示例数据」JSON 里的 key</strong>完全一致（常见为短串如 <code>f6SjhW</code>，也可能为纯数字串）。下表须与<strong>当前 task Webhook 所绑定的子表</strong>列一一对应；默认值来自调研文档示例，若报错请从企业微信示例中复制真实 id。
+                </p>
+                <div className="app-config-field-ids-grid">
+                  {TASK_SMARTSHEET_FIELD_KEYS.map((key) => (
+                    <label key={key} className="app-config-field-id-row">
+                      <span className="app-config-field-id-label">{TASK_SMARTSHEET_FIELD_LABELS[key]}</span>
+                      <input
+                        className="fld"
+                        type="text"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={taskFieldIds[key]}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setTaskFieldIds((prev) => ({ ...prev, [key]: v }));
+                          setSmartsheetHint(null);
+                        }}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="app-config-field-ids-toolbar">
+                  <button
+                    type="button"
+                    className="ghost-btn tiny-btn"
+                    onClick={() => {
+                      resetTaskSmartsheetFieldIdsToDefaults();
+                      setTaskFieldIds(loadTaskSmartsheetFieldIds());
+                      setSmartsheetHint("已恢复为文档示例列字段 id。若需持久化请点击下方「保存」。");
+                    }}
+                  >
+                    恢复默认列字段 id
+                  </button>
+                </div>
+              </details>
+              <div className="app-config-webhooks-table-wrap">
+                <table className="app-config-webhooks-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">业务标识</th>
+                      <th scope="col">说明</th>
+                      <th scope="col">Webhook URL</th>
+                      <th scope="col" className="app-config-webhooks-col-act">
+                        操作
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {webhookRows.map((row, index) => {
+                      const isTask = row.key === SMARTSHEET_WEBHOOK_PURPOSE_TASK;
+                      const label =
+                        SMARTSHEET_WEBHOOK_PURPOSE_LABELS[row.key] ??
+                        (row.key.trim() ? `自定义：${row.key}` : "（新业务，请填写标识与 URL）");
+                      return (
+                        <tr key={`${row.key || "new"}-${index}`}>
+                          <td>
+                            {isTask ? (
+                              <code>{SMARTSHEET_WEBHOOK_PURPOSE_TASK}</code>
+                            ) : (
+                              <input
+                                className="fld"
+                                type="text"
+                                autoComplete="off"
+                                spellCheck={false}
+                                placeholder="如 report_sync"
+                                value={row.key}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setWebhookRows((prev) =>
+                                    prev.map((r, i) => (i === index ? { ...r, key: v } : r)),
+                                  );
+                                  setSmartsheetHint(null);
+                                }}
+                              />
+                            )}
+                          </td>
+                          <td className="app-config-webhooks-meta">{label}</td>
+                          <td>
+                            <input
+                              className="fld"
+                              type="url"
+                              autoComplete="off"
+                              placeholder="https://qyapi.weixin.qq.com/cgi-bin/wedoc/smartsheet/webhook?key=…"
+                              value={row.url}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setWebhookRows((prev) =>
+                                  prev.map((r, i) => (i === index ? { ...r, url: v } : r)),
+                                );
+                                setSmartsheetHint(null);
+                              }}
+                            />
+                          </td>
+                          <td className="app-config-webhooks-col-act">
+                            {isTask ? (
+                              <span className="muted tiny">—</span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="text-btn danger"
+                                onClick={() => {
+                                  setWebhookRows((prev) => prev.filter((_, i) => i !== index));
+                                  setSmartsheetHint(null);
+                                }}
+                              >
+                                删除
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="app-config-webhooks-actions-row">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => {
+                    setWebhookRows((prev) => [...prev, { key: "", url: "" }]);
+                    setSmartsheetHint(null);
+                  }}
+                >
+                  添加 Webhook
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => {
+                    setWebhookRows(getSmartsheetWebhookRowsForEditor());
+                    setSmartsheetHint(null);
+                  }}
+                >
+                  恢复已保存
+                </button>
+                <button type="button" className="primary-btn" onClick={saveSmartsheet}>
                   保存
                 </button>
               </div>

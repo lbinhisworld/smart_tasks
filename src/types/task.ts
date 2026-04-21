@@ -1,8 +1,12 @@
-export type TaskStatus = "进行中" | "已完成" | "实质性进展";
+/** 进行中 / 已完成 为用户或模型直接状态；已超时由期待完成日早于今日且非已完成时自动归并（见 `reconcileTaskStatusByDueDate`） */
+export type TaskStatus = "进行中" | "已完成" | "已超时";
 
 export type TaskCategory = "安全生产" | "技改项目" | "质量与环保";
 
 export type RiskLevel = "high" | "medium" | "low";
+
+/** 任务写入企业微信智能表格 Webhook 后的同步状态 */
+export type SmartsheetPushStatus = "success" | "failed";
 
 export interface Task {
   id: string;
@@ -31,6 +35,10 @@ export interface Task {
   receiverDepartment?: string;
   /** 看板「日报计划提取任务」行 id（`PendingDailyPlanTaskRow.id`）；写入后用于跨页展示已生成任务编号 */
   sourcePendingDailyPlanRowId?: string;
+  /** 最近一次智能表格 Webhook 推送是否成功（未配置 Webhook 时不写入该字段） */
+  smartsheetPushStatus?: SmartsheetPushStatus;
+  /** 最近一次推送失败时的简要原因，供操作列「重推」提示 */
+  smartsheetPushError?: string;
 }
 
 /** 当前视角：固定「集团领导」或配置架构行「{名称}领导」 */
