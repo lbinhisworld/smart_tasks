@@ -272,6 +272,62 @@
   align-self: flex-end;
 }
 
+.home-ai-chat-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+button.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font: inherit;
+}
+
+button.linkish:hover {
+  color: var(--text);
+}
+
+.home-ai-skill-optimize-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  font-size: 0.82rem;
+  color: #9a3412;
+}
+
+.home-ai-pipeline-optimize {
+  margin-top: 6px;
+}
+
+.home-ai-pipeline-opt-btn {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 2px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--primary);
+  cursor: pointer;
+}
+
+.home-ai-pipeline-opt-btn:hover {
+  background: var(--primary-soft);
+}
+
 .home-ai-pipeline {
   display: flex;
   flex-direction: column;
@@ -2360,6 +2416,10 @@ tr.task-table-data-row.is-detail-open {
   max-height: 90vh;
 }
 
+.app-config-modal--md.modal {
+  width: min(880px, 100%);
+}
+
 .app-config-modal-head {
   display: flex;
   align-items: center;
@@ -2429,6 +2489,30 @@ tr.task-table-data-row.is-detail-open {
 
 .app-config-intro {
   margin-top: 0;
+}
+
+.app-config-md-toolbar {
+  margin: 10px 0 8px;
+}
+
+button.app-config-md-download.linkish {
+  font-size: 0.9rem;
+}
+
+.app-config-md-preview {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: min(52vh, 520px);
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
 }
 
 .org-structure-label {

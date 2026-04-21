@@ -5,10 +5,31 @@ import {
   getStoredDeepseekApiKey,
   setStoredDeepseekApiKey,
 } from "../utils/llmExtract";
+import { HOME_ASSISTANT_CORE_MEMORY } from "../utils/homeAssistantPrompt";
+import { readAssistantHistoryMarkdownFile, downloadAssistantHistoryMd } from "../utils/assistantHistoryMd";
+import { getAiChatSkillMarkdown, downloadAiChatSkillMd } from "../utils/aiChatSkillStore";
+import { readSkillUpdateMarkdown, downloadSkillUpdateMd } from "../utils/aiChatSkillRevision";
 import { parseOrgStructureUserInput } from "../utils/orgStructureInput";
 import { getOrgStructureText, setOrgStructureText } from "../utils/orgStructureStorage";
 
-type ConfigTab = "llm" | "org";
+type ConfigTab =
+  | "llm"
+  | "org"
+  | "history_md"
+  | "core_memory_md"
+  | "chat_skill_md"
+  | "chat_skill_update_md";
+
+function downloadCoreMemoryMd(): void {
+  const body = `${HOME_ASSISTANT_CORE_MEMORY.trim()}\n`;
+  const blob = new Blob([body], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "核心记忆模块.md";
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { setUser } = useTasks();
@@ -31,6 +52,12 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
   }, [open]);
 
   if (!open) return null;
+
+  const isMdTab =
+    tab === "history_md" ||
+    tab === "core_memory_md" ||
+    tab === "chat_skill_md" ||
+    tab === "chat_skill_update_md";
 
   function saveLlm() {
     const t = apiKey.trim();
@@ -69,7 +96,7 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
-        className="modal app-config-modal"
+        className={`modal app-config-modal${isMdTab ? " app-config-modal--md" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="app-config-title"
@@ -106,6 +133,42 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
             onClick={() => setTab("org")}
           >
             部门架构
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "history_md"}
+            className={`app-config-tab${tab === "history_md" ? " is-active" : ""}`}
+            onClick={() => setTab("history_md")}
+          >
+            history.md
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "core_memory_md"}
+            className={`app-config-tab${tab === "core_memory_md" ? " is-active" : ""}`}
+            onClick={() => setTab("core_memory_md")}
+          >
+            核心记忆.md
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "chat_skill_md"}
+            className={`app-config-tab${tab === "chat_skill_md" ? " is-active" : ""}`}
+            onClick={() => setTab("chat_skill_md")}
+          >
+            chat_skill.md
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "chat_skill_update_md"}
+            className={`app-config-tab${tab === "chat_skill_update_md" ? " is-active" : ""}`}
+            onClick={() => setTab("chat_skill_update_md")}
+          >
+            chat_skill_update.md
           </button>
         </div>
 
@@ -177,6 +240,72 @@ export function AppConfigModal({ open, onClose }: { open: boolean; onClose: () =
                   保存
                 </button>
               </div>
+            </div>
+          )}
+
+          {tab === "history_md" && (
+            <div className="app-config-panel app-config-panel--md" role="tabpanel">
+              <p className="muted small app-config-intro">
+                AI 助手交互压缩历史（浏览器 localStorage）。关闭弹窗后若有新对话，可再次打开本页刷新内容。
+              </p>
+              <div className="app-config-md-toolbar">
+                <button type="button" className="linkish app-config-md-download" onClick={() => downloadAssistantHistoryMd()}>
+                  下载 history.md
+                </button>
+              </div>
+              <pre className="app-config-md-preview" tabIndex={0}>
+                {readAssistantHistoryMarkdownFile()}
+              </pre>
+            </div>
+          )}
+
+          {tab === "core_memory_md" && (
+            <div className="app-config-panel app-config-panel--md" role="tabpanel">
+              <p className="muted small app-config-intro">
+                AI 助手主题路由使用的<strong>系统常驻知识</strong>，来自仓库{" "}
+                <code>docs/核心记忆模块.md</code>（构建时打包进前端）。
+              </p>
+              <div className="app-config-md-toolbar">
+                <button type="button" className="linkish app-config-md-download" onClick={() => downloadCoreMemoryMd()}>
+                  下载 核心记忆模块.md
+                </button>
+              </div>
+              <pre className="app-config-md-preview" tabIndex={0}>
+                {HOME_ASSISTANT_CORE_MEMORY}
+              </pre>
+            </div>
+          )}
+
+          {tab === "chat_skill_md" && (
+            <div className="app-config-panel app-config-panel--md" role="tabpanel">
+              <p className="muted small app-config-intro">
+                四环节大模型 system 提示词（默认来自仓库 <code>docs/ai_chat_skill.md</code>，本地修订存
+                localStorage）。
+              </p>
+              <div className="app-config-md-toolbar">
+                <button type="button" className="linkish app-config-md-download" onClick={() => downloadAiChatSkillMd()}>
+                  下载 chat_skill.md
+                </button>
+              </div>
+              <pre className="app-config-md-preview" tabIndex={0}>
+                {getAiChatSkillMarkdown()}
+              </pre>
+            </div>
+          )}
+
+          {tab === "chat_skill_update_md" && (
+            <div className="app-config-panel app-config-panel--md" role="tabpanel">
+              <p className="muted small app-config-intro">
+                通过 AI 助手环节「优化」修订提示词后生成的变更摘要与节选。
+              </p>
+              <div className="app-config-md-toolbar">
+                <button type="button" className="linkish app-config-md-download" onClick={() => downloadSkillUpdateMd()}>
+                  下载 chat_skill_update.md
+                </button>
+              </div>
+              <pre className="app-config-md-preview" tabIndex={0}>
+                {readSkillUpdateMarkdown()}
+              </pre>
             </div>
           )}
         </div>

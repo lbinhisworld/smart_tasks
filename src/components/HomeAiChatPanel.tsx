@@ -42,6 +42,9 @@ import {
 import { buildReportStructuredArrayForLlm } from "../utils/homeAssistantReportPayload";
 import { callLlmChatJsonObject, readLlmEnv } from "../utils/llmExtract";
 import { extractionHistoryVisibleForPerspective } from "../utils/leaderPerspective";
+import { appendAssistantHistoryTurn } from "../utils/assistantHistoryMd";
+import { skillKeyForPipelineStep } from "../utils/aiChatSkillStore";
+import { reviseSkillPromptWithFeedback } from "../utils/aiChatSkillRevision";
 import {
   filterExtractionHistoryByReportScope,
   inferIsoDatesFromChineseQuestion,
@@ -64,12 +67,17 @@ export type AssistantPipeline = {
 type ChatMessage =
   | { role: "user"; text: string }
   | { role: "assistant"; text: string }
-  | { role: "assistant"; pipeline: AssistantPipeline };
+  | { role: "assistant"; pipeline: AssistantPipeline; pipelineContext?: { isReport: boolean } };
 
 const ROUTER_FALLBACK: TopicRouterResult = {
   topic: "general",
   topic_rationale: "未能解析主题路由结果，已按「综合或其它」处理。",
 };
+
+function buildAssistantWelcome(perspective: string): string {
+  const p = perspective.trim() || "用户";
+  return `尊敬的【${p}】，欢迎使用齐峰新材重点任务管理系统。`;
+}
 
 function createInitialPipeline(): AssistantPipeline {
   return {
@@ -90,7 +98,23 @@ function patchLastPipeline(messages: ChatMessage[], fn: (p: AssistantPipeline) =
   return [...messages.slice(0, last), { ...tail, pipeline: fn(tail.pipeline) }];
 }
 
-function AssistantPipelineBlock({ pipeline }: { pipeline: AssistantPipeline }) {
+function patchLastPipelineWithContext(messages: ChatMessage[], isReport: boolean): ChatMessage[] {
+  const last = messages.length - 1;
+  if (last < 0) return messages;
+  const tail = messages[last];
+  if (tail.role !== "assistant" || !("pipeline" in tail)) return messages;
+  return [...messages.slice(0, last), { ...tail, pipelineContext: { isReport } }];
+}
+
+function AssistantPipelineBlock({
+  pipeline,
+  pipelineContext,
+  onOptimizeStep,
+}: {
+  pipeline: AssistantPipeline;
+  pipelineContext?: { isReport: boolean };
+  onOptimizeStep?: (stepIndex: number, stepActionName: string, ctx?: { isReport: boolean }) => void;
+}) {
   return (
     <div className="home-ai-pipeline" role="region" aria-label="查询流水线">
       {pipeline.steps.map((step, idx) => (
@@ -119,19 +143,32 @@ function AssistantPipelineBlock({ pipeline }: { pipeline: AssistantPipeline }) {
             )}
           </div>
           {step.resultFeedback && step.status !== "waiting" && (
-            <div
-              className={
-                step.actionName === "具体数据返回"
-                  ? "home-ai-pipeline-result home-ai-pipeline-result--md"
-                  : "home-ai-pipeline-result"
-              }
-            >
-              {step.actionName === "具体数据返回" ? (
-                <ReactMarkdown>{step.resultFeedback}</ReactMarkdown>
-              ) : (
-                step.resultFeedback
+            <>
+              <div
+                className={
+                  step.actionName === "具体数据返回"
+                    ? "home-ai-pipeline-result home-ai-pipeline-result--md"
+                    : "home-ai-pipeline-result"
+                }
+              >
+                {step.actionName === "具体数据返回" ? (
+                  <ReactMarkdown>{step.resultFeedback}</ReactMarkdown>
+                ) : (
+                  step.resultFeedback
+                )}
+              </div>
+              {step.status === "done" && onOptimizeStep && (
+                <div className="home-ai-pipeline-optimize">
+                  <button
+                    type="button"
+                    className="home-ai-pipeline-opt-btn"
+                    onClick={() => onOptimizeStep(idx, step.actionName, pipelineContext)}
+                  >
+                    优化
+                  </button>
+                </div>
               )}
-            </div>
+            </>
           )}
         </div>
       ))}
@@ -141,15 +178,38 @@ function AssistantPipelineBlock({ pipeline }: { pipeline: AssistantPipeline }) {
 
 export function HomeAiChatPanel() {
   const { user, tasks } = useTasks();
+  const optimizeTargetRef = useRef<{
+    skillKey: import("../utils/aiChatSkillStore").AiChatSkillKey;
+    stepLabel: string;
+    stepActionName: string;
+  } | null>(null);
+  const [optimizeBanner, setOptimizeBanner] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      text: "你好，我是数据看板助手。每次提问将顺序执行四步：**主题判断** → **数据范围判断** → **数据记录判断** → **具体数据返回**；每步会先显示「我正在进行【动作名】」与加载动画，完成后变为 ✅ 并展示结果反馈。第 4 步结果支持 **Markdown** 渲染，小标题（## / ###）将以蓝色突出显示。请先配置大模型 Key。",
-    },
+    { role: "assistant", text: buildAssistantWelcome("") },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+
+  const handleOptimizeStep = useCallback(
+    (stepIndex: number, stepActionName: string, ctx?: { isReport: boolean }) => {
+      const isReport = ctx?.isReport ?? false;
+      const mapped = skillKeyForPipelineStep(stepIndex, isReport);
+      if (!mapped) return;
+      optimizeTargetRef.current = {
+        skillKey: mapped.key,
+        stepLabel: mapped.label,
+        stepActionName,
+      };
+      setOptimizeBanner(`请反馈【${stepActionName}】的修改意见`);
+    },
+    [],
+  );
+
+  const cancelOptimize = useCallback(() => {
+    optimizeTargetRef.current = null;
+    setOptimizeBanner(null);
+  }, []);
 
   useEffect(() => {
     const el = listRef.current;
@@ -157,18 +217,72 @@ export function HomeAiChatPanel() {
     el.scrollTop = el.scrollHeight;
   }, [messages, busy]);
 
+  useEffect(() => {
+    setMessages((m) => {
+      if (m.length !== 1) return m;
+      const x = m[0];
+      if (x.role !== "assistant" || "pipeline" in x) return m;
+      if (!x.text.includes("欢迎使用齐峰新材重点任务管理系统")) return m;
+      return [{ role: "assistant", text: buildAssistantWelcome(user.perspective) }];
+    });
+  }, [user.perspective]);
+
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || busy) return;
+
+    const opt = optimizeTargetRef.current;
+    if (opt) {
+      const { skillKey, stepLabel, stepActionName } = opt;
+      optimizeTargetRef.current = null;
+      setOptimizeBanner(null);
+      setInput("");
+      const env = readLlmEnv();
+      if (!env) {
+        setMessages((m) => [
+          ...m,
+          { role: "user", text },
+          {
+            role: "assistant",
+            text: "未配置大模型，无法根据修改意见修订提示词。请先在「系统配置」中填写 Key。",
+          },
+        ]);
+        return;
+      }
+      setBusy(true);
+      try {
+        const r = await reviseSkillPromptWithFeedback(env, {
+          skillKey,
+          stepLabel,
+          userFeedback: text,
+        });
+        if (r.ok) {
+          setMessages((m) => [
+            ...m,
+            { role: "user", text },
+            {
+              role: "assistant",
+              text: `已根据你的意见更新环节「${stepActionName}」对应的提示词（已写入本地 ai_chat_skill，可导出备份）。\n\n**主要修改**：${r.changeSummary}`,
+            },
+          ]);
+        } else {
+          setMessages((m) => [
+            ...m,
+            { role: "user", text },
+            { role: "assistant", text: `提示词修订未成功：${r.error}` },
+          ]);
+        }
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
     setInput("");
     setMessages((m) => [...m, { role: "user", text }, { role: "assistant", pipeline: createInitialPipeline() }]);
     setBusy(true);
 
-    const runOffline = () => {
-      const offlineRouter: TopicRouterResult = {
-        topic: inferOfflineTopic(text),
-        topic_rationale: inferOfflineIntentSummary(text),
-      };
+    const runOffline = (offlineRouter: TopicRouterResult) => {
       setMessages((m) =>
         patchLastPipeline(m, () => ({
           steps: [
@@ -201,7 +315,24 @@ export function HomeAiChatPanel() {
     try {
       const env = readLlmEnv();
       if (!env) {
-        runOffline();
+        const offlineRouter: TopicRouterResult = {
+          topic: inferOfflineTopic(text),
+          topic_rationale: inferOfflineIntentSummary(text),
+        };
+        runOffline(offlineRouter);
+        try {
+          appendAssistantHistoryTurn({
+            userText: text,
+            topicLabel: topicChineseLabel(offlineRouter.topic),
+            topicKeywords: offlineRouter.topic_rationale,
+            scopeDescription: "离线未连接大模型，无数据范围判定",
+            recordIdsSummary: "—",
+            answerSummary: "未完成查询，请配置模型 Key 后重试",
+          });
+        } catch {
+          /* 历史写入失败不影响主流程 */
+        }
+        setMessages((m) => patchLastPipelineWithContext(m, offlineRouter.topic === "report_management"));
         return;
       }
 
@@ -365,6 +496,27 @@ export function HomeAiChatPanel() {
             }),
           })),
         );
+
+        try {
+          const idLine =
+            picked.length > 0
+              ? picked.map((h) => h.id).join("、")
+              : reportDateStalemate
+                ? "日期僵局·无记录入模"
+                : "无匹配提取记录";
+          appendAssistantHistoryTurn({
+            userText: text,
+            topicLabel: topicChineseLabel(router.topic),
+            topicKeywords: router.topic_rationale,
+            scopeDescription,
+            recordIdsSummary: idLine,
+            answerSummary: judged?.record_set_summary
+              ? `${judged.record_set_summary}｜${answerFromReport}`
+              : answerFromReport,
+          });
+        } catch {
+          /* ignore */
+        }
       } else {
         // —— ③ 任务/综合 · 数据记录判断（动态记忆 id）——
         const recordRes = await callLlmChatJsonObject(
@@ -440,9 +592,39 @@ export function HomeAiChatPanel() {
             }),
           })),
         );
+
+        try {
+          const codes = taskCodes.length ? taskCodes.join("、") : "";
+          const hids = historyIds.length ? historyIds.join("、") : "";
+          const idLine = [codes && `任务:${codes}`, hids && `提取:${hids}`].filter(Boolean).join("；") || "—";
+          appendAssistantHistoryTurn({
+            userText: text,
+            topicLabel: topicChineseLabel(router.topic),
+            topicKeywords: router.topic_rationale,
+            scopeDescription: `已明确数据范围：${scopeDescription}`,
+            recordIdsSummary: idLine,
+            answerSummary: answer,
+          });
+        } catch {
+          /* ignore */
+        }
       }
+
+      setMessages((m) => patchLastPipelineWithContext(m, isReport));
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e);
+      try {
+        appendAssistantHistoryTurn({
+          userText: text,
+          topicLabel: "执行异常",
+          topicKeywords: "流水线中断",
+          scopeDescription: "—",
+          recordIdsSummary: "—",
+          answerSummary: err,
+        });
+      } catch {
+        /* ignore */
+      }
       setMessages((m) =>
         patchLastPipeline(m, (p) => {
           const steps = [...p.steps];
@@ -485,7 +667,11 @@ export function HomeAiChatPanel() {
           if ("pipeline" in msg) {
             return (
               <div key={`${i}-pipeline`} className="home-ai-chat-bubble home-ai-chat-bubble--assistant">
-                <AssistantPipelineBlock pipeline={msg.pipeline} />
+                <AssistantPipelineBlock
+                  pipeline={msg.pipeline}
+                  pipelineContext={msg.pipelineContext}
+                  onOptimizeStep={handleOptimizeStep}
+                />
               </div>
             );
           }
@@ -497,12 +683,24 @@ export function HomeAiChatPanel() {
         })}
       </div>
       <div className="home-ai-chat-input-row">
+        {optimizeBanner && (
+          <div className="home-ai-skill-optimize-banner" role="status">
+            <span>{optimizeBanner}</span>
+            <button type="button" className="linkish tiny" onClick={cancelOptimize}>
+              取消
+            </button>
+          </div>
+        )}
         <textarea
           className="home-ai-chat-textarea fld"
           rows={3}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="输入问题，Enter 发送；Shift+Enter 换行"
+          placeholder={
+            optimizeBanner
+              ? "请输入对该环节提示词的修改意见，Enter 发送"
+              : "输入问题，Enter 发送；Shift+Enter 换行"
+          }
           disabled={busy}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
