@@ -14,6 +14,7 @@ import { isIsoDateString } from "../utils/taskDueDate";
 import { Donut } from "./Donut";
 import { PendingArrangementSection } from "./PendingArrangementSection";
 import { ReportDashboardTab } from "./ReportDashboardTab";
+import { SalesDashboardTab } from "./SalesDashboardTab";
 import { HomeAiChatPanel } from "./HomeAiChatPanel";
 
 function monthKey(d: Date) {
@@ -32,7 +33,7 @@ const CATEGORY_META: Record<string, { title: string; subtitle: string }> = {
   "管理作风与赋能类 (Management)": { title: "管理作风与赋能", subtitle: "标准闭环、技能培训与精益标准化" },
 };
 
-type HomeBoardTab = "tasks" | "reports";
+type HomeBoardTab = "tasks" | "reports" | "sales";
 
 /** 默认落地页「看板」；任务与报告双 Tab。 */
 export function Dashboard() {
@@ -147,10 +148,21 @@ export function Dashboard() {
         >
           报告看板
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={homeBoardTab === "sales"}
+          className={`report-main-tab${homeBoardTab === "sales" ? " is-active" : ""}`}
+          onClick={() => setHomeBoardTab("sales")}
+        >
+          销售看板
+        </button>
       </div>
 
       {homeBoardTab === "reports" ? (
         <ReportDashboardTab history={filteredReportHistory} perspective={user.perspective} />
+      ) : homeBoardTab === "sales" ? (
+        <SalesDashboardTab />
       ) : (
         <div className="dashboard">
       <div className="dash-main">

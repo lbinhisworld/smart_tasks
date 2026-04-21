@@ -1,7 +1,7 @@
 /**
- * @fileoverview 应用壳：四页路由（看板 / 报告 / 任务 / 数据中台）、`TaskProvider`。
- * 四页组件**同时挂载**，以 `display` 切换可见，便于在数据看板使用 AI 助手时后台驱动报告解析等逻辑而**不切换整页**。
- * `OPEN_REPORTS_PAGE_EVENT` 仍将路由切到报告页（用户从看板「跳转原文」等）。
+ * @fileoverview 应用壳：多页路由（看板 / 报告 / 任务 / 销售预测 / 数据中台）、`TaskProvider`。
+ * 各页**同时挂载**，以 `display` 切换可见，便于数据看板 AI 助手后台驱动报告解析等而**不切换整页**。
+ * `OPEN_REPORTS_PAGE_EVENT` 仍将路由切到报告页（看板「跳转原文」等）。
  * `ASSISTANT_UI_ACTION_EVENT` 中导航类令牌不调用 `setPage`。
  *
  * @module App
@@ -12,6 +12,7 @@ import "./App.css";
 import { TaskProvider } from "./context/TaskContext";
 import { AppShell } from "./components/AppShell";
 import { Dashboard } from "./components/Dashboard";
+import { SalesForecast } from "./components/SalesForecast";
 import { TaskManagement } from "./components/TaskManagement";
 import { OPEN_REPORTS_PAGE_EVENT } from "./utils/reportCitation";
 import {
@@ -33,7 +34,7 @@ const DataSync = lazy(async () => {
 });
 
 export default function App() {
-  const [page, setPage] = useState<"board" | "reports" | "tasks" | "sync">("board");
+  const [page, setPage] = useState<"board" | "reports" | "tasks" | "salesForecast" | "sync">("board");
 
   useEffect(() => {
     const openReports = () => setPage("reports");
@@ -92,6 +93,13 @@ export default function App() {
           aria-hidden={paneHidden("tasks")}
         >
           <TaskManagement />
+        </div>
+        <div
+          className="app-route-pane"
+          style={{ display: page === "salesForecast" ? "block" : "none" }}
+          aria-hidden={paneHidden("salesForecast")}
+        >
+          <SalesForecast />
         </div>
         <div
           className="app-route-pane"
