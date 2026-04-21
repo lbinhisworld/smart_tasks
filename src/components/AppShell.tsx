@@ -11,8 +11,8 @@ export function AppShell({
   onNav,
 }: {
   children: ReactNode;
-  active: "board" | "reports" | "tasks" | "sync";
-  onNav: (p: "board" | "reports" | "tasks" | "sync") => void;
+  active: "board" | "reports" | "tasks" | "salesForecast" | "sync";
+  onNav: (p: "board" | "reports" | "tasks" | "salesForecast" | "sync") => void;
 }) {
   const { user, setUser } = useTasks();
   const [configModalOpen, setConfigModalOpen] = useState(false);
@@ -93,6 +93,13 @@ export function AppShell({
             onClick={() => onNav("tasks")}
           >
             任务管理
+          </button>
+          <button
+            type="button"
+            className={active === "salesForecast" ? "nav-btn active" : "nav-btn"}
+            onClick={() => onNav("salesForecast")}
+          >
+            销售预测
           </button>
           <button
             type="button"

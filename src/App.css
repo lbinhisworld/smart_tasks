@@ -823,6 +823,10 @@ button.linkish:hover {
   --report-dash-metric-pad-x: 16px;
 }
 
+.sales-dash-inbound-second-tree {
+  margin-top: 1.25rem;
+}
+
 .report-dash-tree-branch--depth1 {
   margin: 6px 0 10px 8px;
   padding: 6px 0 4px 4px;
@@ -903,6 +907,23 @@ button.linkish:hover {
   background: #fff;
   box-shadow: 0 0 0 2px #cbd5e1;
   flex-shrink: 0;
+}
+
+/* 销售看板 · 进货单第三级：树轨人像图标 */
+.sales-dash-tree-person-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.sales-dash-tree-person-icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
 }
 
 .report-dash-tree-card--level2 .report-dash-company-title {
@@ -2928,6 +2949,494 @@ button.app-config-md-download.linkish {
 .report-page {
   max-width: 1100px;
   margin: 0 auto;
+}
+
+.sales-forecast-page {
+  max-width: 1430px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sales-forecast-upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.sales-forecast-file-label {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sales-forecast-error {
+  margin: 10px 0 0;
+  color: #b42318;
+  font-size: 0.88rem;
+}
+
+.sales-forecast-encoding-hint {
+  display: block;
+  margin-top: 6px;
+}
+
+.sales-data-preview-card .sales-data-preview-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.sales-data-preview-meta {
+  margin: 0 0 12px;
+}
+
+.sales-data-preview-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sales-disassemble-btn {
+  flex-shrink: 0;
+}
+
+.sales-analysis-base-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.sales-analysis-base-hint {
+  margin: 0 0 10px;
+  color: #a15c07;
+  font-size: 0.85rem;
+}
+
+.sales-analysis-base-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sales-order-segment-btn {
+  flex-shrink: 0;
+}
+
+.sales-order-segment-btn:disabled {
+  cursor: wait;
+  opacity: 0.92;
+}
+
+.sales-order-segment-btn-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.sales-order-segment-btn-spinner {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: sales-order-segment-spin 0.65s linear infinite;
+}
+
+@keyframes sales-order-segment-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sales-order-segment-panel {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.sales-order-segment-meta {
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+
+.sales-order-segment-charts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .sales-order-segment-charts {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sales-order-segment-chart {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.sales-order-segment-chart--fragmented {
+  background: linear-gradient(135deg, #fef2f2 0%, #fff 55%);
+  border-color: #fecaca;
+}
+
+.sales-order-segment-chart--low {
+  background: linear-gradient(135deg, #f0f9ff 0%, #fff 55%);
+  border-color: #bae6fd;
+}
+
+.sales-order-segment-chart--high {
+  background: linear-gradient(135deg, #ecfdf5 0%, #fff 55%);
+  border-color: #a7f3d0;
+}
+
+.sales-order-segment-chart-bar {
+  width: 5px;
+  flex-shrink: 0;
+}
+
+.sales-order-segment-chart--fragmented .sales-order-segment-chart-bar {
+  background: linear-gradient(180deg, #f87171, #dc2626);
+}
+
+.sales-order-segment-chart--low .sales-order-segment-chart-bar {
+  background: linear-gradient(180deg, #38bdf8, #0284c7);
+}
+
+.sales-order-segment-chart--high .sales-order-segment-chart-bar {
+  background: linear-gradient(180deg, #34d399, #059669);
+}
+
+.sales-order-segment-chart-body {
+  padding: 12px 14px;
+  flex: 1;
+  min-width: 0;
+}
+
+.sales-order-segment-chart-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+  letter-spacing: 0.02em;
+}
+
+.sales-order-segment-chart--fragmented .sales-order-segment-chart-title {
+  color: #b91c1c;
+}
+
+.sales-order-segment-chart--low .sales-order-segment-chart-title {
+  color: #0369a1;
+}
+
+.sales-order-segment-chart--high .sales-order-segment-chart-title {
+  color: #047857;
+}
+
+.sales-order-qty-seg-cell {
+  vertical-align: middle;
+  text-align: center;
+}
+
+.sales-order-qty-seg-tag {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.06em;
+}
+
+.sales-order-qty-seg-tag--high {
+  background: linear-gradient(180deg, #10b981, #059669);
+}
+
+.sales-order-qty-seg-tag--low {
+  background: linear-gradient(180deg, #0ea5e9, #0284c7);
+}
+
+.sales-order-qty-seg-tag--fragmented {
+  background: linear-gradient(180deg, #ef4444, #dc2626);
+}
+
+/* 销售看板 · 进货单分布（配色与进货量分类标签一致） */
+.sales-dash-inbound-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+
+.sales-dash-inbound-grid--dense {
+  gap: 6px;
+}
+
+.sales-dash-inbound-grid--dense .sales-dash-inbound-tile {
+  padding: 6px 6px;
+  border-radius: 6px;
+}
+
+.sales-dash-inbound-grid--dense .sales-dash-inbound-tile-value {
+  font-size: 1.05rem;
+  line-height: 1.15;
+}
+
+.sales-dash-inbound-grid--dense .sales-dash-inbound-tile-label {
+  font-size: 0.64rem;
+  margin-bottom: 2px;
+}
+
+.sales-dash-inbound-tile {
+  border-radius: 10px;
+  padding: 12px 10px;
+  color: #fff;
+  text-align: center;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.sales-dash-inbound-tile-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  opacity: 0.95;
+  margin-bottom: 2px;
+  letter-spacing: 0.06em;
+}
+
+.sales-dash-inbound-tile-value {
+  font-size: 1.45rem;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+/* 进货单分布 · 第二级（销售组）区域更紧凑 */
+.report-dash-company-row:has(.sales-dash-inbound-level2-metrics) .report-dash-company-toggle {
+  padding-bottom: 4px;
+}
+
+.report-dash-company-row:has(.sales-dash-inbound-level2-metrics) .report-dash-company-title {
+  margin-bottom: 6px;
+}
+
+.sales-dash-inbound-level2-metrics {
+  padding: 0 var(--report-dash-metric-pad-x) 6px;
+}
+
+/* 进货单分布 · 第三级（业务员）卡片更紧凑 */
+.sales-dash-inbound-person-list {
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sales-dash-inbound-person-list .report-dash-workshop-card {
+  padding: 6px var(--report-dash-metric-pad-x);
+  min-width: 0;
+}
+
+.sales-dash-inbound-person-list .report-dash-workshop-name {
+  margin-bottom: 4px;
+}
+
+/* 第三级进货单指标：宽度与 margin-left 由 JS 按二级栅格测量写入，保证高/低/零散列与二级右对齐 */
+.sales-dash-inbound-person-list .sales-dash-inbound-l3-tiles-align {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 第三级指标卡片：白底 + 档位色文字 + 同色虚线边框（团队/人 与 型号/品名 两图共用） */
+.sales-dash-inbound-l3-tiles-align .sales-dash-inbound-tile {
+  background: #fff !important;
+  box-shadow: none;
+  border: 1px dashed;
+  border-radius: 6px;
+}
+
+.sales-dash-inbound-l3-tiles-align .sales-dash-inbound-tile-label,
+.sales-dash-inbound-l3-tiles-align .sales-dash-inbound-tile-value {
+  color: inherit;
+  opacity: 1;
+}
+
+.sales-dash-inbound-l3-tiles-align .sales-dash-inbound-tile--high {
+  color: #059669;
+  border-color: #059669;
+}
+
+.sales-dash-inbound-l3-tiles-align .sales-dash-inbound-tile--low {
+  color: #0284c7;
+  border-color: #0284c7;
+}
+
+.sales-dash-inbound-l3-tiles-align .sales-dash-inbound-tile--fragmented {
+  color: #dc2626;
+  border-color: #dc2626;
+}
+
+.sales-dash-inbound-tile--fragmented {
+  background: linear-gradient(180deg, #ef4444, #dc2626);
+}
+
+.sales-dash-inbound-tile--low {
+  background: linear-gradient(180deg, #0ea5e9, #0284c7);
+}
+
+.sales-dash-inbound-tile--high {
+  background: linear-gradient(180deg, #10b981, #059669);
+}
+
+.sales-order-segment-chart-rule {
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.45;
+  margin-bottom: 8px;
+}
+
+.sales-order-segment-chart-threshold {
+  font-size: 0.88rem;
+  color: var(--foreground, #0f172a);
+}
+
+.sales-order-segment-chart-threshold strong {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.sales-analysis-base-th-material {
+  vertical-align: top;
+  min-width: 12rem;
+}
+
+.sales-analysis-base-th-material-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.sales-analysis-base-th-material-title {
+  font-weight: 600;
+}
+
+.sales-material-tag-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  font-weight: 400;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.sales-material-tag-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sales-material-tag-legend-item .sales-material-tag {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  font-size: 0.68rem;
+  line-height: 1.3;
+}
+
+.sales-material-tags-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  align-content: flex-start;
+  vertical-align: top;
+  min-width: 140px;
+}
+
+.sales-material-tag {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.35;
+  border: 1px solid transparent;
+}
+
+.sales-material-tag--id {
+  background: #e0e7ff;
+  color: #3730a3;
+  border-color: #c7d2fe;
+}
+
+.sales-material-tag--model {
+  background: #dbeafe;
+  color: #1e40af;
+  border-color: #bfdbfe;
+}
+
+.sales-material-tag--name {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #bbf7d0;
+}
+
+.sales-material-tag--spec {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #fde68a;
+}
+
+.sales-material-tag--grammage {
+  background: #fce7f3;
+  color: #9d174d;
+  border-color: #fbcfe8;
+}
+
+.sales-material-tag--source {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+.sales-data-preview-table-wrap {
+  max-height: min(70vh, 560px);
+}
+
+/* 滚动数据时表头固定（sticky 在带 border-collapse:collapse 的表上不稳定，故单独 separate） */
+.sales-data-preview-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+}
+
+.sales-data-preview-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f8fafc;
+  color: var(--muted);
+  font-weight: 600;
+  box-shadow: 0 1px 0 var(--border);
+}
+
+.sales-data-preview-table tbody td {
+  background: var(--surface);
 }
 
 .report-page .report-mgmt-tabs {

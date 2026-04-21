@@ -1,5 +1,5 @@
 /**
- * @fileoverview 应用壳：四页路由（看板 / 报告 / 任务 / 数据中台）、`TaskProvider`、报告页与数据中台页懒加载。
+ * @fileoverview 应用壳：多页路由（看板 / 报告 / 任务 / 销售预测 / 数据中台）、`TaskProvider`、部分页面懒加载。
  * 监听 `OPEN_REPORTS_PAGE_EVENT` 将路由切到报告页，供看板「跳转原文」与全局导航协同。
  *
  * @module App
@@ -10,6 +10,7 @@ import "./App.css";
 import { TaskProvider } from "./context/TaskContext";
 import { AppShell } from "./components/AppShell";
 import { Dashboard } from "./components/Dashboard";
+import { SalesForecast } from "./components/SalesForecast";
 import { TaskManagement } from "./components/TaskManagement";
 import { OPEN_REPORTS_PAGE_EVENT } from "./utils/reportCitation";
 
@@ -24,7 +25,7 @@ const DataSync = lazy(async () => {
 });
 
 export default function App() {
-  const [page, setPage] = useState<"board" | "reports" | "tasks" | "sync">("board");
+  const [page, setPage] = useState<"board" | "reports" | "tasks" | "salesForecast" | "sync">("board");
 
   useEffect(() => {
     const openReports = () => setPage("reports");
@@ -43,6 +44,8 @@ export default function App() {
           </Suspense>
         ) : page === "tasks" ? (
           <TaskManagement />
+        ) : page === "salesForecast" ? (
+          <SalesForecast />
         ) : (
           <Suspense fallback={<div className="page-loading">数据中台加载中…</div>}>
             <DataSync />
