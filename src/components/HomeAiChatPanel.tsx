@@ -25,6 +25,7 @@ import {
   buildReportDataRecordUserPayload,
   buildTopicRouterSystemPrompt,
   buildTopicRouterUserPayload,
+  type DataScopeBaselineIds,
   formatReportDataScopeFeedback,
   formatTopicBlock,
   inferOfflineIntentSummary,
@@ -41,33 +42,41 @@ import {
 } from "../utils/homeAssistantPrompt";
 import { buildReportStructuredArrayForLlm } from "../utils/homeAssistantReportPayload";
 import { callLlmChatJsonObject, readLlmEnv } from "../utils/llmExtract";
+import { nextRevealEnd, rollingThreeSubtitleLines, sleepMs } from "../utils/userModeStreamDisplay";
 import { extractionHistoryVisibleForPerspective } from "../utils/leaderPerspective";
-import { appendAssistantHistoryTurn } from "../utils/assistantHistoryMd";
+import {
+  appendAssistantHistoryTurn,
+  getAssistantHistoryForRouter,
+  inferTopicFromHistoryMarkdown,
+  intentTopicSwitchedFromPrior,
+} from "../utils/assistantHistoryMd";
 import { skillKeyForPipelineStep } from "../utils/aiChatSkillStore";
 import { reviseSkillPromptWithFeedback } from "../utils/aiChatSkillRevision";
+import {
+  loadStoredChatMessages,
+  normalizeStoredMessages,
+  saveStoredChatMessages,
+  type AssistantPipelinePersisted as AssistantPipeline,
+  type StoredChatMessage as ChatMessage,
+} from "../utils/homeAiChatPersistence";
 import {
   filterExtractionHistoryByReportScope,
   inferIsoDatesFromChineseQuestion,
   resolveReportDatesAgainstVisibleHistory,
 } from "../utils/reportExtractionScopeFilter";
+import { runHomeAiUserModePipeline, type UserModeStreamStage } from "../utils/homeAiUserModePipeline";
 
-export type PipelineStepStatus = "waiting" | "running" | "done" | "error";
+export type { PipelineStepStatusPersisted as PipelineStepStatus } from "../utils/homeAiChatPersistence";
+export type { PipelineStepPersisted as PipelineStep } from "../utils/homeAiChatPersistence";
+export type { AssistantPipelinePersisted as AssistantPipeline } from "../utils/homeAiChatPersistence";
 
-export type PipelineStep = {
-  actionName: string;
-  status: PipelineStepStatus;
-  /** 结果反馈提示语（展示在动作行下方） */
-  resultFeedback?: string;
+const ASSISTANT_UI_MODE_KEY = "qifeng_home_ai_ui_mode_v1";
+
+type UserModeLiveState = {
+  stageLabel: string;
+  lines: [string, string, string];
+  phase: "streaming" | "done" | "final-waiting";
 };
-
-export type AssistantPipeline = {
-  steps: PipelineStep[];
-};
-
-type ChatMessage =
-  | { role: "user"; text: string }
-  | { role: "assistant"; text: string }
-  | { role: "assistant"; pipeline: AssistantPipeline; pipelineContext?: { isReport: boolean } };
 
 const ROUTER_FALLBACK: TopicRouterResult = {
   topic: "general",
@@ -104,6 +113,56 @@ function patchLastPipelineWithContext(messages: ChatMessage[], isReport: boolean
   const tail = messages[last];
   if (tail.role !== "assistant" || !("pipeline" in tail)) return messages;
   return [...messages.slice(0, last), { ...tail, pipelineContext: { isReport } }];
+}
+
+function SkillReviseBubbleLine({
+  skillRevise,
+}: {
+  skillRevise: import("../utils/homeAiChatPersistence").SkillReviseBubblePersisted;
+}) {
+  const { status, stepActionName, changeSummary, error } = skillRevise;
+  const headline =
+    status === "running"
+      ? `正在优化【${stepActionName}】技能描述`
+      : status === "done"
+        ? `已完成优化【${stepActionName}】技能描述`
+        : `优化【${stepActionName}】技能描述未成功`;
+  return (
+    <div className="home-ai-skill-revise">
+      <div className="home-ai-skill-revise-cue">
+        <span>{headline}</span>
+        {status === "running" && <span className="home-ai-pipeline-spin" aria-hidden />}
+        {status === "done" && (
+          <span className="home-ai-pipeline-check" aria-label="已完成">
+            ✅
+          </span>
+        )}
+        {status === "error" && (
+          <span className="home-ai-pipeline-err" aria-label="失败">
+            ✕
+          </span>
+        )}
+      </div>
+      {status === "done" && (
+        <>
+          <p className="muted small home-ai-skill-revise-donehint">
+            已根据你的意见更新该环节提示词（已写入本地 ai_chat_skill，可在系统配置中导出备份）。
+          </p>
+          {changeSummary?.trim() && (
+            <div className="home-ai-skill-revise-summary">
+              <div className="home-ai-skill-revise-summary-label">主要修改</div>
+              <div className="home-ai-skill-revise-summary-md">
+                <ReactMarkdown>{changeSummary.trim()}</ReactMarkdown>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+      {status === "error" && error?.trim() && (
+        <div className="home-ai-skill-revise-errdetail">{error.trim()}</div>
+      )}
+    </div>
+  );
 }
 
 function AssistantPipelineBlock({
@@ -184,12 +243,33 @@ export function HomeAiChatPanel() {
     stepActionName: string;
   } | null>(null);
   const [optimizeBanner, setOptimizeBanner] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "assistant", text: buildAssistantWelcome("") },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    const loaded = loadStoredChatMessages();
+    if (loaded?.length) return normalizeStoredMessages(loaded);
+    return [{ role: "assistant", text: buildAssistantWelcome("") }];
+  });
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [assistantUiMode, setAssistantUiMode] = useState<"user" | "debug">(() => {
+    try {
+      const v = localStorage.getItem(ASSISTANT_UI_MODE_KEY);
+      if (v === "user" || v === "debug") return v;
+    } catch {
+      /* ignore */
+    }
+    return "debug";
+  });
+  const [userModeLive, setUserModeLive] = useState<UserModeLiveState | null>(null);
+  const [streamReveal, setStreamReveal] = useState<{ full: string; shown: string } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ASSISTANT_UI_MODE_KEY, assistantUiMode);
+    } catch {
+      /* ignore */
+    }
+  }, [assistantUiMode]);
 
   const handleOptimizeStep = useCallback(
     (stepIndex: number, stepActionName: string, ctx?: { isReport: boolean }) => {
@@ -215,14 +295,18 @@ export function HomeAiChatPanel() {
     const el = listRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages, busy]);
+  }, [messages, busy, userModeLive, streamReveal]);
+
+  useEffect(() => {
+    saveStoredChatMessages(messages);
+  }, [messages]);
 
   useEffect(() => {
     setMessages((m) => {
       if (m.length !== 1) return m;
       const x = m[0];
-      if (x.role !== "assistant" || "pipeline" in x) return m;
-      if (!x.text.includes("欢迎使用齐峰新材重点任务管理系统")) return m;
+      if (x.role !== "assistant" || "pipeline" in x || "skillRevise" in x) return m;
+      if (!("text" in x) || !x.text.includes("欢迎使用齐峰新材重点任务管理系统")) return m;
       return [{ role: "assistant", text: buildAssistantWelcome(user.perspective) }];
     });
   }, [user.perspective]);
@@ -250,30 +334,166 @@ export function HomeAiChatPanel() {
         return;
       }
       setBusy(true);
+      setMessages((m) => [
+        ...m,
+        { role: "user", text },
+        {
+          role: "assistant",
+          skillRevise: {
+            stepActionName,
+            stepLabel,
+            status: "running",
+          },
+        },
+      ]);
       try {
         const r = await reviseSkillPromptWithFeedback(env, {
           skillKey,
           stepLabel,
           userFeedback: text,
         });
-        if (r.ok) {
-          setMessages((m) => [
-            ...m,
-            { role: "user", text },
+        setMessages((m) => {
+          const next = [...m];
+          let patched = false;
+          for (let i = next.length - 1; i >= 0; i--) {
+            const msg = next[i];
+            if (
+              msg.role === "assistant" &&
+              "skillRevise" in msg &&
+              msg.skillRevise.status === "running" &&
+              msg.skillRevise.stepActionName === stepActionName
+            ) {
+              next[i] = {
+                role: "assistant",
+                skillRevise: {
+                  stepActionName,
+                  stepLabel,
+                  status: r.ok ? "done" : "error",
+                  changeSummary: r.ok ? r.changeSummary : undefined,
+                  error: r.ok ? undefined : r.error,
+                },
+              };
+              patched = true;
+              break;
+            }
+          }
+          if (patched) return next;
+          return [
+            ...next,
             {
-              role: "assistant",
-              text: `已根据你的意见更新环节「${stepActionName}」对应的提示词（已写入本地 ai_chat_skill，可导出备份）。\n\n**主要修改**：${r.changeSummary}`,
+              role: "assistant" as const,
+              text: r.ok
+                ? `已根据你的意见更新环节「${stepActionName}」对应的提示词（已写入本地 ai_chat_skill，可导出备份）。\n\n**主要修改**：${r.changeSummary}`
+                : `提示词修订未成功：${r.error}`,
             },
-          ]);
-        } else {
-          setMessages((m) => [
-            ...m,
-            { role: "user", text },
-            { role: "assistant", text: `提示词修订未成功：${r.error}` },
-          ]);
-        }
+          ];
+        });
       } finally {
         setBusy(false);
+      }
+      return;
+    }
+
+    if (assistantUiMode === "user") {
+      setInput("");
+      setMessages((m) => [...m, { role: "user", text }]);
+      setBusy(true);
+      setUserModeLive(null);
+      const runStage: UserModeStreamStage = async (stageLabel, streamFn) => {
+        setUserModeLive({ stageLabel, lines: ["", "", ""], phase: "streaming" });
+        const r = await streamFn((acc) => {
+          setUserModeLive((prev) =>
+            prev && prev.stageLabel === stageLabel && prev.phase === "streaming"
+              ? { ...prev, lines: rollingThreeSubtitleLines(acc) }
+              : prev,
+          );
+        });
+        setUserModeLive((prev) =>
+          prev && prev.stageLabel === stageLabel ? { ...prev, phase: "done" } : prev,
+        );
+        await sleepMs(480);
+        setUserModeLive(null);
+        return r;
+      };
+      try {
+        const env = readLlmEnv();
+        if (!env) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: "assistant",
+              text: "未配置大模型，请先在右上角「系统配置」中填写 Key 后重试。",
+            },
+          ]);
+          return;
+        }
+        const ures = await runHomeAiUserModePipeline(text, env, tasks, user.perspective, runStage, {
+          onFinalAnswerLoading: () =>
+            setUserModeLive({
+              stageLabel: "数据查询中",
+              lines: ["", "", ""],
+              phase: "final-waiting",
+            }),
+        });
+        if (!ures.ok) {
+          setMessages((m) => [...m, { role: "assistant", text: `执行异常：${ures.error}` }]);
+          try {
+            appendAssistantHistoryTurn({
+              userText: text,
+              topicLabel: "执行异常",
+              topicKeywords: "用户模式流水线",
+              scopeDescription: "—",
+              recordIdsSummary: "—",
+              answerSummary: ures.error,
+            });
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
+        const d = ures.data;
+        if (d.kind === "report") {
+          try {
+            appendAssistantHistoryTurn({
+              userText: text,
+              topicLabel: topicChineseLabel(d.router.topic),
+              topicKeywords: d.router.topic_rationale,
+              scopeDescription: d.scopeDescription,
+              recordIdsSummary: d.idLine,
+              answerSummary: `${d.recordSummary}｜${d.answer}`,
+            });
+          } catch {
+            /* ignore */
+          }
+        } else {
+          try {
+            appendAssistantHistoryTurn({
+              userText: text,
+              topicLabel: topicChineseLabel(d.router.topic),
+              topicKeywords: d.router.topic_rationale,
+              scopeDescription: d.scopeDescription,
+              recordIdsSummary: d.idLine,
+              answerSummary: d.answer,
+            });
+          } catch {
+            /* ignore */
+          }
+        }
+        const answerText = d.answer;
+        setUserModeLive(null);
+        setStreamReveal({ full: answerText, shown: "" });
+        let revealIdx = 0;
+        while (revealIdx < answerText.length) {
+          revealIdx = nextRevealEnd(answerText, revealIdx);
+          setStreamReveal({ full: answerText, shown: answerText.slice(0, revealIdx) });
+          await sleepMs(12);
+        }
+        setMessages((m) => [...m, { role: "assistant", text: answerText }]);
+        setStreamReveal(null);
+      } finally {
+        setBusy(false);
+        setUserModeLive(null);
+        setStreamReveal(null);
       }
       return;
     }
@@ -344,7 +564,20 @@ export function HomeAiChatPanel() {
         1024,
       );
       const routerParsed = parseTopicRouterJson(routerRes.content);
-      const router: TopicRouterResult = routerParsed ?? ROUTER_FALLBACK;
+      let router: TopicRouterResult = routerParsed ?? ROUTER_FALLBACK;
+      if (router.topic === "general") {
+        const inferred = inferTopicFromHistoryMarkdown(getAssistantHistoryForRouter());
+        if (
+          inferred &&
+          (inferred === "report_management" || inferred === "task_management") &&
+          !intentTopicSwitchedFromPrior(text, router.topic_rationale, inferred)
+        ) {
+          router = {
+            topic: inferred,
+            topic_rationale: `${router.topic_rationale}（多轮语境：根据 history.md 中近期主题线索延续为「${topicChineseLabel(inferred)}」。）`,
+          };
+        }
+      }
       const topicBlock = formatTopicBlock(router);
 
       setMessages((m) =>
@@ -375,6 +608,8 @@ export function HomeAiChatPanel() {
 
       // —— ② 数据范围判断 ——
       let scopeDescription: string;
+      let taskDataRecordScopeDescriptionForLlm = "";
+      let taskBranchScopeBaseline: DataScopeBaselineIds | null = null;
       if (isReport) {
         const allHist = loadExtractionHistory();
         reportPipelineVis = allHist.filter((h) => extractionHistoryVisibleForPerspective(h, user.perspective));
@@ -414,8 +649,26 @@ export function HomeAiChatPanel() {
           1024,
         );
         const scopeParsed = parseDataScopeJson(scopeRes.content);
-        scopeDescription =
+        const scopeDescriptionCore =
           scopeParsed?.scope_description ?? "（模型未返回可解析的数据范围，将按空范围继续。）";
+        const scopeBaseline =
+          scopeParsed &&
+          (scopeParsed.baseline_task_codes?.length || scopeParsed.baseline_extraction_history_ids?.length)
+            ? {
+                task_codes: scopeParsed.baseline_task_codes ?? [],
+                extraction_history_ids: scopeParsed.baseline_extraction_history_ids ?? [],
+              }
+            : null;
+        taskDataRecordScopeDescriptionForLlm = scopeDescriptionCore;
+        taskBranchScopeBaseline = scopeBaseline;
+        scopeDescription = scopeDescriptionCore;
+        if (scopeBaseline) {
+          scopeDescription = `${scopeDescriptionCore}\n记录标识基线（优先于下一步匹配）：任务 ${
+            scopeBaseline.task_codes.length ? scopeBaseline.task_codes.join("、") : "—"
+          }；提取历史 ${
+            scopeBaseline.extraction_history_ids.length ? scopeBaseline.extraction_history_ids.join("、") : "—"
+          }`;
+        }
       }
 
       setMessages((m) =>
@@ -522,7 +775,12 @@ export function HomeAiChatPanel() {
         const recordRes = await callLlmChatJsonObject(
           env,
           buildDataRecordSystemPrompt(),
-          buildDataRecordUserPayload(text, topicBlock, scopeDescription),
+          buildDataRecordUserPayload(
+            text,
+            topicBlock,
+            taskDataRecordScopeDescriptionForLlm,
+            taskBranchScopeBaseline,
+          ),
           2048,
         );
         const recordParsed = parseDataRecordJson(recordRes.content);
@@ -594,9 +852,15 @@ export function HomeAiChatPanel() {
         );
 
         try {
-          const codes = taskCodes.length ? taskCodes.join("、") : "";
-          const hids = historyIds.length ? historyIds.join("、") : "";
-          const idLine = [codes && `任务:${codes}`, hids && `提取:${hids}`].filter(Boolean).join("；") || "—";
+          const idLine =
+            pickedTasks.length || pickedHistory.length
+              ? [
+                  pickedTasks.length && `任务:${pickedTasks.map((t) => t.code).join("、")}`,
+                  pickedHistory.length && `提取:${pickedHistory.map((h) => h.id).join("、")}`,
+                ]
+                  .filter(Boolean)
+                  .join("；")
+              : "—";
           appendAssistantHistoryTurn({
             userText: text,
             topicLabel: topicChineseLabel(router.topic),
@@ -647,13 +911,33 @@ export function HomeAiChatPanel() {
     } finally {
       setBusy(false);
     }
-  }, [input, busy, tasks, user.perspective]);
+  }, [input, busy, tasks, user.perspective, assistantUiMode]);
 
   return (
     <div className="card home-ai-chat" aria-label="AI 问答">
-      <div className="card-head tight">
+      <div className="card-head tight home-ai-chat-head">
         <h3>AI 助手</h3>
-        <span className="muted tiny">当前视角：{user.perspective || "—"}</span>
+        <div className="home-ai-mode-tabs" role="tablist" aria-label="助手显示模式">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={assistantUiMode === "user"}
+            className={`home-ai-mode-tab${assistantUiMode === "user" ? " is-active" : ""}`}
+            onClick={() => setAssistantUiMode("user")}
+          >
+            用户模式
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={assistantUiMode === "debug"}
+            className={`home-ai-mode-tab${assistantUiMode === "debug" ? " is-active" : ""}`}
+            onClick={() => setAssistantUiMode("debug")}
+          >
+            调试模式
+          </button>
+        </div>
+        <span className="muted tiny home-ai-chat-perspective">当前视角：{user.perspective || "—"}</span>
       </div>
       <div className="home-ai-chat-messages" ref={listRef} role="log" aria-live="polite">
         {messages.map((msg, i) => {
@@ -675,12 +959,58 @@ export function HomeAiChatPanel() {
               </div>
             );
           }
+          if ("skillRevise" in msg) {
+            return (
+              <div key={`${i}-skill-revise`} className="home-ai-chat-bubble home-ai-chat-bubble--assistant">
+                <SkillReviseBubbleLine skillRevise={msg.skillRevise} />
+              </div>
+            );
+          }
           return (
-            <div key={`${i}-assistant`} className="home-ai-chat-bubble home-ai-chat-bubble--assistant">
-              {msg.text}
+            <div
+              key={`${i}-assistant`}
+              className="home-ai-chat-bubble home-ai-chat-bubble--assistant home-ai-chat-bubble--md"
+            >
+              <ReactMarkdown>{msg.text}</ReactMarkdown>
             </div>
           );
         })}
+        {userModeLive && (
+          <div className="home-ai-user-mode-stage-wrap">
+            <div className="home-ai-user-mode-stage">
+              <div className="home-ai-user-mode-stage-title">
+                <span className="home-ai-user-mode-stage-title-text">{userModeLive.stageLabel}</span>
+                {(userModeLive.phase === "streaming" || userModeLive.phase === "final-waiting") && (
+                  <span className="home-ai-pipeline-spin home-ai-user-mode-title-spin" aria-hidden />
+                )}
+                {userModeLive.phase === "done" && (
+                  <span className="home-ai-user-mode-check" aria-hidden>
+                    ☑️
+                  </span>
+                )}
+              </div>
+              {userModeLive.phase !== "final-waiting" && (
+                <div className="home-ai-user-mode-cues">
+                  {userModeLive.lines.map((line, li) => (
+                    <div key={li} className="home-ai-user-mode-cue-line">
+                      {line || "\u00a0"}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {streamReveal && (
+          <div className="home-ai-chat-bubble home-ai-chat-bubble--assistant home-ai-user-stream-reveal-wrap">
+            <div className="home-ai-user-stream-reveal-inner">
+              <span className="home-ai-user-stream-reveal-text">{streamReveal.shown}</span>
+              <span className="home-ai-user-stream-reveal-cursor" aria-hidden>
+                ▍
+              </span>
+            </div>
+          </div>
+        )}
       </div>
       <div className="home-ai-chat-input-row">
         {optimizeBanner && (
@@ -699,7 +1029,9 @@ export function HomeAiChatPanel() {
           placeholder={
             optimizeBanner
               ? "请输入对该环节提示词的修改意见，Enter 发送"
-              : "输入问题，Enter 发送；Shift+Enter 换行"
+              : assistantUiMode === "user"
+                ? "用户模式：Enter 发送；前三步流式字幕，数据查询完成后在聊天区逐字显示答复"
+                : "调试模式：输入问题，Enter 发送；Shift+Enter 换行"
           }
           disabled={busy}
           onKeyDown={(e) => {

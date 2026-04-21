@@ -2,7 +2,6 @@
  * @fileoverview AI 助手：核心记忆、四步流水线（主题判断 → 数据范围 → 数据记录 id → 本机行 JSON 精准作答）及离线启发式。
  */
 
-import coreMemoryMarkdown from "../../docs/核心记忆模块.md?raw";
 import {
   resolveDataRecordTasksSystemPrompt,
   resolveDataScopeGeneralSystemPrompt,
@@ -11,6 +10,8 @@ import {
   resolveReportDataRecordSystemPrompt,
   resolveTopicRouterSystemPrompt,
 } from "./aiChatSkillStore";
+
+export { getBundledCoreMemoryText, getCoreMemoryText, setCoreMemoryText } from "./coreMemoryStorage";
 
 /** 路由判定：报告管理 / 任务管理 / 综合 */
 export type AssistantTopic = "report_management" | "task_management" | "general";
@@ -22,6 +23,9 @@ export type TopicRouterResult = {
 
 export type DataScopeResult = {
   scope_description: string;
+  /** 沿用 history「据」或上一轮记录集时，供数据记录步骤优先收窄 */
+  baseline_task_codes?: string[];
+  baseline_extraction_history_ids?: string[];
 };
 
 export type DataRecordResult = {
@@ -29,8 +33,6 @@ export type DataRecordResult = {
   extraction_history_ids: string[];
   rationale: string;
 };
-
-export const HOME_ASSISTANT_CORE_MEMORY = coreMemoryMarkdown.trim();
 
 // --- ① 主题判断（仅核心记忆）---
 
@@ -99,13 +101,33 @@ ${topicBlock}
 ${question.trim()}`;
 }
 
+function parseOptionalIdArray(o: Record<string, unknown>, key: string): string[] {
+  const v = o[key];
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean);
+}
+
 export function parseDataScopeJson(raw: string): DataScopeResult | null {
   try {
     const o = JSON.parse(raw.trim()) as Record<string, unknown>;
     const scope_description =
       typeof o.scope_description === "string" ? o.scope_description.trim() : "";
-    if (!scope_description) return null;
-    return { scope_description };
+    const baseline_task_codes = parseOptionalIdArray(o, "baseline_task_codes");
+    const baseline_extraction_history_ids = parseOptionalIdArray(o, "baseline_extraction_history_ids");
+    if (
+      !scope_description &&
+      baseline_task_codes.length === 0 &&
+      baseline_extraction_history_ids.length === 0
+    ) {
+      return null;
+    }
+    return {
+      scope_description:
+        scope_description ||
+        "沿用近期 history 中上一轮「据」内的记录标识为本轮基线，并结合用户追问收窄后选行。",
+      baseline_task_codes,
+      baseline_extraction_history_ids,
+    };
   } catch {
     return null;
   }
@@ -162,18 +184,34 @@ export function buildDataRecordSystemPrompt(): string {
   return resolveDataRecordTasksSystemPrompt();
 }
 
+/** 数据范围阶段给出的、须在数据记录步骤优先考虑的 id 集合 */
+export type DataScopeBaselineIds = {
+  task_codes: string[];
+  extraction_history_ids: string[];
+};
+
 export function buildDataRecordUserPayload(
   question: string,
   topicBlock: string,
   scopeDescription: string,
+  baseline?: DataScopeBaselineIds | null,
 ): string {
+  const hasBase =
+    baseline && (baseline.task_codes.length > 0 || baseline.extraction_history_ids.length > 0);
+  const baselineBlock = hasBase
+    ? `【记录标识基线（须优先在此集合内匹配，再结合【用户问题】筛选；勿编造未出现在此基线与本机记忆中的编号/id）】
+任务编号：${baseline!.task_codes.length ? baseline!.task_codes.join("、") : "（无）"}
+提取历史 id：${baseline!.extraction_history_ids.length ? baseline!.extraction_history_ids.join("、") : "（无）"}
+
+`
+    : "";
   return `【主题判断结果】
 ${topicBlock}
 
 【数据范围判断结果】
 ${scopeDescription}
 
-【用户问题】
+${baselineBlock}【用户问题】
 ${question.trim()}`;
 }
 

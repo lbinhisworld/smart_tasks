@@ -3,13 +3,12 @@
  */
 
 import defaultSkillMarkdown from "../../docs/ai_chat_skill.md?raw";
-import coreMemoryMarkdown from "../../docs/核心记忆模块.md?raw";
+import { getCoreMemoryText } from "./coreMemoryStorage";
+import { getAssistantHistoryForRouter } from "./assistantHistoryMd";
 import { loadReportDynamicMemoryText } from "./reportDynamicMemory";
 import { loadTaskDynamicMemoryText } from "./taskDynamicMemory";
 
 const STORAGE_KEY = "qifeng_ai_chat_skill_md_v1";
-
-const HOME_ASSISTANT_CORE_MEMORY = coreMemoryMarkdown.trim();
 
 export type AiChatSkillKey =
   | "intent"
@@ -35,6 +34,7 @@ const STANDARD_PREAMBLE = `# AI 助手环节提示词（ai_chat_skill）
 **占位符（请勿删除，除非明确改为不注入动态块）：**
 
 - \`{{CORE_MEMORY}}\`：替换为《核心记忆模块》全文。
+- \`{{ASSISTANT_HISTORY}}\`：替换为当前 \`history.md\` 压缩历史（主题路由、**数据范围判断**等均会注入；过长自动截断保留更近内容）。
 - \`{{TASK_DYNAMIC_MEMORY}}\`、\`{{REPORT_DYNAMIC_MEMORY}}\`：替换为任务 / 日报动态记忆文本。
 
 ---
@@ -185,6 +185,15 @@ export function setAiChatSkillMarkdown(fullMd: string): void {
   }
 }
 
+/** 保存前校验主要 ## 标题是否存在（缺失时环节解析可能回退到内置默认）。 */
+export function validateAiChatSkillMarkdownShape(md: string): string | null {
+  const need = ["## 意图判断", "## 数据范围判断", "## 数据记录判断", "## 具体数据返回"];
+  for (const h of need) {
+    if (!md.includes(h)) return `正文中缺少「${h}」，保存后部分环节可能仍使用内置默认片段。`;
+  }
+  return null;
+}
+
 export function setSkillPart(key: AiChatSkillKey, body: string): void {
   const parts = getSkillParts();
   parts[key] = body.trim();
@@ -199,17 +208,49 @@ export function resetAiChatSkillToBundledDefault(): void {
   }
 }
 
-/** 主题判断 system 提示（已注入核心记忆） */
+/** 主题判断 system 提示（已注入核心记忆 + history.md 压缩历史） */
 export function resolveTopicRouterSystemPrompt(): string {
-  return getSkillParts().intent.replace(/\{\{CORE_MEMORY\}\}/g, HOME_ASSISTANT_CORE_MEMORY.trim());
+  const history = getAssistantHistoryForRouter();
+  const rawIntent = getSkillParts().intent;
+  const hadHistoryPlaceholder = rawIntent.includes("{{ASSISTANT_HISTORY}}");
+  let s = rawIntent
+    .replace(/\{\{CORE_MEMORY\}\}/g, getCoreMemoryText().trim())
+    .replace(/\{\{ASSISTANT_HISTORY\}\}/g, history);
+  if (!hadHistoryPlaceholder && !s.includes("【近期交互压缩历史（history.md）】")) {
+    const marker = "【你必须输出的 JSON】";
+    const idx = s.indexOf(marker);
+    const block = `\n【近期交互压缩历史（history.md）】\n${history}\n\n`;
+    if (idx >= 0) s = s.slice(0, idx) + block + s.slice(idx);
+    else s += block;
+  }
+  return s;
+}
+
+function injectAssistantHistoryIntoDataScopePrompt(raw: string): string {
+  const history = getAssistantHistoryForRouter();
+  let s = raw.replace(/\{\{ASSISTANT_HISTORY\}\}/g, history);
+  const hasBlock = s.includes("【近期交互压缩历史（history.md）】");
+  const hadPlaceholder = raw.includes("{{ASSISTANT_HISTORY}}");
+  if (!hadPlaceholder && !hasBlock) {
+    const markers = ["只输出一个 JSON", "【你必须输出的 JSON】"];
+    let idx = -1;
+    for (const m of markers) {
+      idx = s.indexOf(m);
+      if (idx >= 0) break;
+    }
+    const block = `\n【近期交互压缩历史（history.md）】\n${history}\n\n`;
+    if (idx >= 0) s = s.slice(0, idx) + block + s.slice(idx);
+    else s = `${block}${s}`;
+  }
+  return s;
 }
 
 export function resolveDataScopeGeneralSystemPrompt(): string {
-  return getSkillParts().data_scope_general;
+  return injectAssistantHistoryIntoDataScopePrompt(getSkillParts().data_scope_general);
 }
 
 export function resolveDataScopeReportSystemPrompt(): string {
-  return getSkillParts().data_scope_report;
+  return injectAssistantHistoryIntoDataScopePrompt(getSkillParts().data_scope_report);
 }
 
 export function resolveDataRecordTasksSystemPrompt(): string {

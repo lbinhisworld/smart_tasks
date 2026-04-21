@@ -12,6 +12,7 @@
  */
 
 import { REPORT_EXTRACTION_USER_INSTRUCTION } from "../constants/reportExtractionPrompt";
+import { appendLlmCallLog, formatChatMessagesForLog } from "./llmCallLog";
 
 export interface LlmEnv {
   apiUrl: string;
@@ -119,6 +120,10 @@ async function postChatCompletion(
   if (env.apiKey) headers.Authorization = `Bearer ${env.apiKey}`;
 
   const t0 = performance.now();
+  const inputText = formatChatMessagesForLog(messages);
+  const log = (row: Parameters<typeof appendLlmCallLog>[0]) => {
+    appendLlmCallLog(row);
+  };
 
   const payload: Record<string, unknown> = {
     model: env.model,
@@ -132,14 +137,38 @@ async function postChatCompletion(
     payload.response_format = { type: "json_object" };
   }
 
-  const res = await fetch(env.apiUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-  });
+  let res: Response;
+  try {
+    res = await fetch(env.apiUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    const err = e instanceof Error ? e.message : String(e);
+    log({
+      at: Date.now(),
+      inputText,
+      outputText: "",
+      error: `网络或请求异常：${err}`,
+      model: env.model,
+      durationMs: Math.round(performance.now() - t0),
+      responseMode,
+    });
+    throw e;
+  }
 
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
+    log({
+      at: Date.now(),
+      inputText,
+      outputText: errText.trim() || "（无响应体）",
+      error: `HTTP ${res.status}`,
+      model: env.model,
+      durationMs: Math.round(performance.now() - t0),
+      responseMode,
+    });
     throw new Error(`模型接口错误 ${res.status}: ${errText.slice(0, 500)}`);
   }
 
@@ -156,7 +185,18 @@ async function postChatCompletion(
   const durationMs = Math.round(performance.now() - t0);
 
   const content = data.choices?.[0]?.message?.content;
-  if (!content?.trim()) throw new Error("模型返回为空。");
+  if (!content?.trim()) {
+    log({
+      at: Date.now(),
+      inputText,
+      outputText: "(空)",
+      error: "模型返回为空",
+      model: typeof data.model === "string" && data.model.trim() ? data.model.trim() : env.model,
+      durationMs,
+      responseMode,
+    });
+    throw new Error("模型返回为空。");
+  }
 
   const u = data.usage;
   const promptTokens =
@@ -174,7 +214,7 @@ async function postChatCompletion(
   const fr = data.choices?.[0]?.finish_reason;
   const finishReason: string | null = typeof fr === "string" ? fr : null;
 
-  return {
+  const result: ProductionReportExtractionResult = {
     content: content.trim(),
     model,
     inputTokens: promptTokens,
@@ -183,6 +223,236 @@ async function postChatCompletion(
     durationMs,
     finishReason,
   };
+
+  log({
+    at: Date.now(),
+    inputText,
+    outputText: result.content,
+    model: result.model,
+    durationMs: result.durationMs,
+    responseMode,
+    finishReason: result.finishReason,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+  });
+
+  return result;
+}
+
+/**
+ * 流式 JSON 补全（OpenAI/DeepSeek 兼容 SSE）。`onDelta` 收到截至目前拼接的全文。
+ */
+export async function callLlmChatJsonObjectStreaming(
+  env: LlmEnv,
+  systemContent: string,
+  userContent: string,
+  maxCompletionTokens: number | undefined,
+  onDelta: (accumulated: string) => void,
+): Promise<ProductionReportExtractionResult> {
+  return postChatCompletionStreaming(
+    env,
+    [
+      { role: "system", content: systemContent },
+      { role: "user", content: userContent },
+    ],
+    0.2,
+    "json_object",
+    maxCompletionTokens,
+    onDelta,
+  );
+}
+
+async function postChatCompletionStreaming(
+  env: LlmEnv,
+  messages: ChatRoleMessage[],
+  temperature = 0.2,
+  responseMode: ChatResponseMode = "json_object",
+  maxCompletionTokens?: number,
+  onDelta?: (accumulated: string) => void,
+): Promise<ProductionReportExtractionResult> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (env.apiKey) headers.Authorization = `Bearer ${env.apiKey}`;
+
+  const t0 = performance.now();
+  const inputText = formatChatMessagesForLog(messages);
+  const log = (row: Parameters<typeof appendLlmCallLog>[0]) => {
+    appendLlmCallLog(row);
+  };
+
+  const payload: Record<string, unknown> = {
+    model: env.model,
+    temperature,
+    messages,
+    stream: true,
+  };
+  if (typeof maxCompletionTokens === "number" && maxCompletionTokens > 0) {
+    payload.max_tokens = maxCompletionTokens;
+  }
+  if (responseMode === "json_object") {
+    payload.response_format = { type: "json_object" };
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(env.apiUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    const err = e instanceof Error ? e.message : String(e);
+    log({
+      at: Date.now(),
+      inputText,
+      outputText: "",
+      error: `网络或请求异常：${err}`,
+      model: env.model,
+      durationMs: Math.round(performance.now() - t0),
+      responseMode,
+    });
+    throw e;
+  }
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    log({
+      at: Date.now(),
+      inputText,
+      outputText: errText.trim() || "（无响应体）",
+      error: `HTTP ${res.status}`,
+      model: env.model,
+      durationMs: Math.round(performance.now() - t0),
+      responseMode,
+    });
+    throw new Error(`模型接口错误 ${res.status}: ${errText.slice(0, 500)}`);
+  }
+
+  const body = res.body;
+  if (!body) {
+    log({
+      at: Date.now(),
+      inputText,
+      outputText: "",
+      error: "响应无 body",
+      model: env.model,
+      durationMs: Math.round(performance.now() - t0),
+      responseMode,
+    });
+    throw new Error("模型接口未返回可读的流。");
+  }
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let sseBuffer = "";
+  let fullContent = "";
+  let finishReason: string | null = null;
+  let respModel: string | null = null;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      sseBuffer += decoder.decode(value, { stream: true });
+      while (true) {
+        const nl = sseBuffer.indexOf("\n");
+        if (nl < 0) break;
+        let line = sseBuffer.slice(0, nl).trim();
+        sseBuffer = sseBuffer.slice(nl + 1);
+        if (!line) continue;
+        if (line.startsWith("data:")) line = line.slice(5).trim();
+        if (line === "[DONE]") continue;
+        try {
+          const chunk = JSON.parse(line) as {
+            model?: string;
+            choices?: {
+              delta?: { content?: string };
+              finish_reason?: string | null;
+            }[];
+          };
+          if (typeof chunk.model === "string" && chunk.model.trim()) respModel = chunk.model.trim();
+          const choice = chunk.choices?.[0];
+          const fr = choice?.finish_reason;
+          if (typeof fr === "string") finishReason = fr;
+          const piece = choice?.delta?.content;
+          if (piece) {
+            fullContent += piece;
+            onDelta?.(fullContent);
+          }
+        } catch {
+          /* 非 JSON 行或分片，忽略 */
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  for (const rawLine of sseBuffer.split("\n")) {
+    let line = rawLine.trim();
+    if (!line) continue;
+    if (line.startsWith("data:")) line = line.slice(5).trim();
+    if (line === "[DONE]") continue;
+    try {
+      const chunk = JSON.parse(line) as {
+        model?: string;
+        choices?: {
+          delta?: { content?: string };
+          finish_reason?: string | null;
+        }[];
+      };
+      if (typeof chunk.model === "string" && chunk.model.trim()) respModel = chunk.model.trim();
+      const choice = chunk.choices?.[0];
+      const fr = choice?.finish_reason;
+      if (typeof fr === "string") finishReason = fr;
+      const piece = choice?.delta?.content;
+      if (piece) {
+        fullContent += piece;
+        onDelta?.(fullContent);
+      }
+    } catch {
+      /* ignore trailing garbage */
+    }
+  }
+
+  const durationMs = Math.round(performance.now() - t0);
+  const content = fullContent.trim();
+  if (!content) {
+    log({
+      at: Date.now(),
+      inputText,
+      outputText: "(空)",
+      error: "模型流式返回为空",
+      model: respModel ?? env.model,
+      durationMs,
+      responseMode,
+    });
+    throw new Error("模型返回为空。");
+  }
+
+  const model = respModel ?? env.model;
+  const result: ProductionReportExtractionResult = {
+    content,
+    model,
+    inputTokens: null,
+    outputTokens: null,
+    totalTokens: null,
+    durationMs,
+    finishReason,
+  };
+
+  log({
+    at: Date.now(),
+    inputText,
+    outputText: result.content,
+    model: result.model,
+    durationMs: result.durationMs,
+    responseMode,
+    finishReason: result.finishReason,
+    inputTokens: null,
+    outputTokens: null,
+  });
+
+  return result;
 }
 
 /**

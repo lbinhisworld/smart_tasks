@@ -26,7 +26,7 @@ export type SkillRevisionLogEntry = {
 const REVISER_SYSTEM = `你是企业内 AI 助手的「提示词工程师」。用户会给出【环节名称】【当前 system 提示词正文】与【修改意见】。
 
 请输出**一个 JSON 对象**（不要 markdown 代码围栏），恰好包含：
-- "revised_prompt"：字符串，修订后的**完整** system 提示词正文；须保留业务必需的占位符（若原文有）：\`{{CORE_MEMORY}}\`、\`{{TASK_DYNAMIC_MEMORY}}\`、\`{{REPORT_DYNAMIC_MEMORY}}\`。
+- "revised_prompt"：字符串，修订后的**完整** system 提示词正文；须保留业务必需的占位符（若原文有）：\`{{CORE_MEMORY}}\`、\`{{ASSISTANT_HISTORY}}\`、\`{{TASK_DYNAMIC_MEMORY}}\`、\`{{REPORT_DYNAMIC_MEMORY}}\`。
 - "change_summary"：字符串，2～5 句中文，分号或换行分隔，概括相对原文的**主要修改**（要具体，勿空泛）。
 
 Constraints：revised_prompt 为可直接用作 chat completion 的 system 内容；不要输出除 JSON 外任何文字。`;
@@ -103,6 +103,15 @@ export function downloadSkillUpdateMd(): void {
   a.download = "chat_skill_update.md";
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** 配置页直接编辑 chat_skill_update.md 全文时写入 mirror（与 JSON 修订日志可不同步）。 */
+export function saveSkillUpdateMarkdownFromEditor(md: string): void {
+  try {
+    localStorage.setItem(UPDATE_LOG_MD_MIRROR_KEY, md.replace(/\r\n/g, "\n").trimEnd() + "\n");
+  } catch {
+    /* ignore */
+  }
 }
 
 export type SkillRevisionResult =
