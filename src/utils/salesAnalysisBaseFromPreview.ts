@@ -48,6 +48,11 @@ const MATERIAL_CODE_SOURCES = ["存货编码", "物料编码", "物料编号", "
 const MATERIAL_DESC_SOURCES = ["物料描述", "存货名称", "规格型号"];
 const CSV_MATERIAL_LABEL_SOURCES = ["物料标签"];
 
+/** 与底表映射一致，定位 CSV 预览中的「往来户名称」列（供保存预览时改写客户列） */
+export function findSalesCustomerSourceColumnIndex(headers: string[]): number {
+  return findColumnIndex(headers, SOURCE_NAMES.customerName);
+}
+
 function findColumnIndex(headers: string[], candidates: string[]): number {
   const trimmed = headers.map((h) => h.trim());
   for (const c of candidates) {

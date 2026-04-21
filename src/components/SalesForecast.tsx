@@ -4,7 +4,15 @@
  * @module SalesForecast
  */
 
-import { type ChangeEvent, useCallback, useEffect, useId, useMemo, useState } from "react";
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   calculateOrderSegments,
   classifyOrderQuantityLabel,
@@ -12,10 +20,12 @@ import {
   type OrderSegmentResult,
 } from "../utils/calculateOrderSegments";
 import { decodeTextBytesAuto } from "../utils/decodeTextBytesAuto";
+import { formatCustomerPreviewName } from "../utils/formatCustomerPreviewName";
 import { parseCsvText } from "../utils/parseCsvText";
 import { MATERIAL_TAG_LEGEND } from "../utils/parseMaterialCode";
 import {
   buildSalesAnalysisBaseFromPreview,
+  findSalesCustomerSourceColumnIndex,
   SALES_ANALYSIS_BASE_HEADERS,
   type SalesAnalysisBaseRow,
 } from "../utils/salesAnalysisBaseFromPreview";
@@ -43,7 +53,12 @@ function readInitialSalesForecastState(): {
   };
 }
 
-export function SalesForecast() {
+export type SalesForecastProps = {
+  /** 为 true 时表示当前路由在销售预测页；切回本页时从 localStorage 再同步，避免刷新或异常丢状态 */
+  active?: boolean;
+};
+
+export function SalesForecast({ active = true }: SalesForecastProps) {
   const uploadId = useId();
   const initialPersisted = useMemo(() => readInitialSalesForecastState(), []);
   const [pickedFile, setPickedFile] = useState<File | null>(null);
@@ -60,6 +75,23 @@ export function SalesForecast() {
     initialPersisted.orderSegments,
   );
   const [orderSegmentsBusy, setOrderSegmentsBusy] = useState(false);
+  /** 有底表时默认折叠原始 CSV 预览，拆解成功后自动折叠，仍可手动展开 */
+  const [previewCollapsed, setPreviewCollapsed] = useState(() => Boolean(initialPersisted.analysisBase));
+  const prevActiveRef = useRef<boolean | null>(null);
+
+  /** 从其他页签切回销售预测时，用已持久化的预览 / 底表 / 数量分类覆盖本地 state（与 save 写入一致） */
+  useEffect(() => {
+    const prev = prevActiveRef.current;
+    prevActiveRef.current = active;
+    if (!active) return;
+    if (prev === true) return;
+
+    const stored = loadSalesForecastPersisted();
+    if (!stored) return;
+    setPreview(stored.preview);
+    setAnalysisBase(stored.analysisBase);
+    setOrderSegments(stored.orderSegments ?? null);
+  }, [active]);
 
   useEffect(() => {
     if (!analysisBase) setOrderSegments(null);
@@ -70,6 +102,7 @@ export function SalesForecast() {
     setError(null);
     setPreview(null);
     setAnalysisBase(null);
+    setPreviewCollapsed(false);
     if (!f) {
       setPickedFile(null);
       return;
@@ -99,6 +132,7 @@ export function SalesForecast() {
         if (!(buf instanceof ArrayBuffer)) {
           setPreview(null);
           setAnalysisBase(null);
+          setPreviewCollapsed(false);
           setError("读取结果异常。");
           return;
         }
@@ -107,6 +141,7 @@ export function SalesForecast() {
         if (matrix.length === 0) {
           setPreview(null);
           setAnalysisBase(null);
+          setPreviewCollapsed(false);
           setError("文件中没有可解析的数据行。");
           return;
         }
@@ -119,8 +154,18 @@ export function SalesForecast() {
           if (next.length > width) return next.slice(0, width);
           return next;
         });
-        const nextPreview = { headers, rows: normalized, fileName: pickedFile.name };
+        const customerCol = findSalesCustomerSourceColumnIndex(headers);
+        const rowsForPreview =
+          customerCol >= 0
+            ? normalized.map((row) => {
+                const next = [...row];
+                next[customerCol] = formatCustomerPreviewName(next[customerCol] ?? "");
+                return next;
+              })
+            : normalized;
+        const nextPreview = { headers, rows: rowsForPreview, fileName: pickedFile.name };
         setAnalysisBase(null);
+        setPreviewCollapsed(false);
         setPreview(nextPreview);
         if (!saveSalesForecastPersisted(nextPreview, null, null)) {
           setError("数据已显示，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复。");
@@ -128,6 +173,7 @@ export function SalesForecast() {
       } catch (err) {
         setPreview(null);
         setAnalysisBase(null);
+        setPreviewCollapsed(false);
         setError(err instanceof Error ? err.message : "解析 CSV 失败。");
       }
     };
@@ -135,6 +181,7 @@ export function SalesForecast() {
       setBusy(false);
       setPreview(null);
       setAnalysisBase(null);
+      setPreviewCollapsed(false);
       setError("读取文件失败。");
     };
     reader.readAsArrayBuffer(pickedFile);
@@ -152,6 +199,8 @@ export function SalesForecast() {
           : null,
     };
     setAnalysisBase(nextAnalysis);
+    setOrderSegments(null);
+    setPreviewCollapsed(true);
     if (!saveSalesForecastPersisted(preview, nextAnalysis, null)) {
       setError("底表已生成，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复底表。");
     }
@@ -241,36 +290,56 @@ export function SalesForecast() {
       {preview && (
         <section className="card sales-data-preview-card">
           <div className="card-head tight sales-data-preview-card-head">
-            <h3 className="sales-data-preview-title">销售数据预览</h3>
-            <button type="button" className="primary-btn sales-disassemble-btn" onClick={onDisassembleMaterial}>
-              拆解物料记录
-            </button>
+            <div className="sales-data-preview-card-head-left">
+              <h3 className="sales-data-preview-title">销售数据预览</h3>
+              <button
+                type="button"
+                className="ghost-btn tiny-btn sales-data-preview-fold-btn"
+                onClick={() => setPreviewCollapsed((c) => !c)}
+                aria-expanded={!previewCollapsed}
+              >
+                {previewCollapsed ? "展开预览" : "折叠预览"}
+              </button>
+            </div>
+            <div className="sales-data-preview-card-head-actions">
+              <button type="button" className="primary-btn sales-disassemble-btn" onClick={onDisassembleMaterial}>
+                拆解物料记录
+              </button>
+            </div>
           </div>
-          <p className="muted small sales-data-preview-meta">
-            共 {preview.rows.length} 行数据（不含表头）
-          </p>
-          <div className="table-wrap sales-data-preview-table-wrap">
-            <table className="data-table sales-data-preview-table">
-              <thead>
-                <tr>
-                  {preview.headers.map((h, hi) => (
-                    <th key={hi}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {preview.rows.map((row, ri) => (
-                  <tr key={ri}>
-                    {row.map((cell, ci) => (
-                      <td key={ci} className="task-text-wrap">
-                        {cell}
-                      </td>
+          {previewCollapsed ? (
+            <p className="muted small sales-data-preview-collapsed-hint">
+              共 {preview.rows.length} 行数据（不含表头），表格已折叠。
+            </p>
+          ) : (
+            <>
+              <p className="muted small sales-data-preview-meta">
+                共 {preview.rows.length} 行数据（不含表头）
+              </p>
+              <div className="table-wrap sales-data-preview-table-wrap">
+                <table className="data-table sales-data-preview-table">
+                  <thead>
+                    <tr>
+                      {preview.headers.map((h, hi) => (
+                        <th key={hi}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.rows.map((row, ri) => (
+                      <tr key={ri}>
+                        {row.map((cell, ci) => (
+                          <td key={ci} className="task-text-wrap">
+                            {cell}
+                          </td>
+                        ))}
+                      </tr>
                     ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </section>
       )}
 

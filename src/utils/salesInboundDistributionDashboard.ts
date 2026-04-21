@@ -1,6 +1,6 @@
 /**
  * @fileoverview 数据看板「订货单分布」：从销售预测持久化的分析底表按与「生成数量分类」相同规则分档，汇总订单条数；
- * 支持按销售组/业务员或按型号/品名钻取。
+ * 支持按销售组/业务员、型号/品名、销售组/客户名称钻取。
  *
  * @module salesInboundDistributionDashboard
  */
@@ -39,6 +39,18 @@ export type MaterialModelInboundRow = {
   names: MaterialNameInboundRow[];
 };
 
+export type CustomerNameInboundRow = {
+  customerName: string;
+  counts: InboundSegmentCounts;
+};
+
+/** 二级：销售组；三级：客户名称（底表客户名称列） */
+export type SalesGroupCustomerInboundRow = {
+  salesGroup: string;
+  counts: InboundSegmentCounts;
+  customers: CustomerNameInboundRow[];
+};
+
 export type SalesInboundDistributionModel =
   | { ok: false; reason: string }
   | {
@@ -74,6 +86,7 @@ export type SalesInboundDashboardsBundle =
       summary: InboundSegmentCounts;
       teams: SalesTeamInboundRow[];
       models: MaterialModelInboundRow[];
+      teamCustomers: SalesGroupCustomerInboundRow[];
     };
 
 function emptyCounts(): InboundSegmentCounts {
@@ -102,7 +115,7 @@ function compareByHighDescThenLabel(
 }
 
 /**
- * 一次加载、一次遍历，生成团队/人 与 型号/品名 两套钻取数据。
+ * 一次加载、一次遍历，生成团队/人、型号/品名、销售组/客户 三套钻取数据。
  */
 export function buildSalesInboundDashboards(): SalesInboundDashboardsBundle {
   const stored = loadSalesForecastPersisted();
@@ -126,6 +139,7 @@ export function buildSalesInboundDashboards(): SalesInboundDashboardsBundle {
   const summary = emptyCounts();
   let unclassifiedCount = 0;
   const teamMap = new Map<string, Map<string, InboundSegmentCounts>>();
+  const teamCustomerMap = new Map<string, Map<string, InboundSegmentCounts>>();
   const modelMap = new Map<string, Map<string, InboundSegmentCounts>>();
 
   for (const r of rows) {
@@ -142,6 +156,12 @@ export function buildSalesInboundDashboards(): SalesInboundDashboardsBundle {
     const people = teamMap.get(g)!;
     if (!people.has(p)) people.set(p, emptyCounts());
     bump(people.get(p)!, label);
+
+    const cust = (r.customerName ?? "").trim() || "（未填客户名称）";
+    if (!teamCustomerMap.has(g)) teamCustomerMap.set(g, new Map());
+    const customers = teamCustomerMap.get(g)!;
+    if (!customers.has(cust)) customers.set(cust, emptyCounts());
+    bump(customers.get(cust)!, label);
 
     const model = tagText(r.materialTags, "model") || "（未解析型号）";
     const name = tagText(r.materialTags, "name") || "（未解析品名）";
@@ -168,6 +188,26 @@ export function buildSalesInboundDashboards(): SalesInboundDashboardsBundle {
         emptyCounts(),
       );
       return { salesGroup, counts, people };
+    })
+    .sort((a, b) => compareByHighDescThenLabel(a.salesGroup, a.counts.high, b.salesGroup, b.counts.high));
+
+  const teamCustomers: SalesGroupCustomerInboundRow[] = [...teamCustomerMap.entries()]
+    .map(([salesGroup, custMap]) => {
+      const customers: CustomerNameInboundRow[] = [...custMap.entries()]
+        .sort(([ka, ca], [kb, cb]) => compareByHighDescThenLabel(ka, ca.high, kb, cb.high))
+        .map(([customerName, counts]) => ({
+          customerName,
+          counts: { ...counts },
+        }));
+      const counts = customers.reduce(
+        (acc, row) => ({
+          high: acc.high + row.counts.high,
+          low: acc.low + row.counts.low,
+          fragmented: acc.fragmented + row.counts.fragmented,
+        }),
+        emptyCounts(),
+      );
+      return { salesGroup, counts, customers };
     })
     .sort((a, b) => compareByHighDescThenLabel(a.salesGroup, a.counts.high, b.salesGroup, b.counts.high));
 
@@ -200,6 +240,7 @@ export function buildSalesInboundDashboards(): SalesInboundDashboardsBundle {
     summary,
     teams,
     models,
+    teamCustomers,
   };
 }
 

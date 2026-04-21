@@ -1,5 +1,5 @@
 /**
- * @fileoverview 数据看板「销售看板」：进货单分布卡片，按高/低/零散订单数下钻销售组与业务员（树形布局对齐报告看板当日产量）。
+ * @fileoverview 数据看板「销售看板」：订货单分布多级卡片——团队/人、产品（型号/品名）、客户（销售组/客户名称），树形与指标样式一致。
  *
  * @module SalesDashboardTab
  */
@@ -7,9 +7,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   buildSalesInboundDashboards,
+  type CustomerNameInboundRow,
   type InboundSegmentCounts,
   type MaterialModelInboundRow,
   type MaterialNameInboundRow,
+  type SalesGroupCustomerInboundRow,
   type SalesTeamInboundRow,
 } from "../utils/salesInboundDistributionDashboard";
 
@@ -79,6 +81,31 @@ function PersonRailIcon({ title }: { title: string }) {
         />
       </svg>
     </span>
+  );
+}
+
+function CustomerNameRows({ customers }: { customers: CustomerNameInboundRow[] }) {
+  if (customers.length === 0) {
+    return <p className="muted small report-dash-nested-empty">暂无客户明细。</p>;
+  }
+  return (
+    <ul className="report-dash-workshop-list report-dash-workshop-list--tree sales-dash-inbound-person-list">
+      {customers.map((row) => (
+        <li key={row.customerName} className="report-dash-workshop-row">
+          <div className="report-dash-workshop-head-shell">
+            <div className="report-dash-tree-rail report-dash-tree-rail--level3">
+              <PersonRailIcon title={row.customerName} />
+            </div>
+            <div className="report-dash-workshop-card report-dash-tree-card--level3">
+              <div className="report-dash-workshop-name">{row.customerName}</div>
+              <div className="sales-dash-inbound-l3-tiles-align">
+                <InboundCountTiles counts={row.counts} dense />
+              </div>
+            </div>
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -219,6 +246,92 @@ function InboundTeamBlock({
   );
 }
 
+function InboundTeamCustomerBlock({
+  row,
+  expanded,
+  onToggle,
+}: {
+  row: SalesGroupCustomerInboundRow;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const blockRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const el = blockRef.current;
+    if (!expanded) {
+      el?.querySelectorAll<HTMLElement>(".sales-dash-inbound-l3-tiles-align").forEach((node) => {
+        node.style.width = "";
+        node.style.marginLeft = "";
+      });
+      return;
+    }
+
+    const schedule = () => {
+      if (blockRef.current) alignInboundL3GridsToL2(blockRef.current);
+    };
+    schedule();
+    const raf = requestAnimationFrame(schedule);
+    const l2Grid = el?.querySelector(".sales-dash-inbound-level2-metrics .sales-dash-inbound-grid");
+    const ro = new ResizeObserver(schedule);
+    if (l2Grid) ro.observe(l2Grid);
+    if (el) ro.observe(el);
+    window.addEventListener("resize", schedule);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener("resize", schedule);
+    };
+  }, [expanded, row.salesGroup, row.customers]);
+
+  return (
+    <div
+      ref={blockRef}
+      className="report-dash-company-block report-dash-tree-node report-dash-tree-node--level2 sales-dash-inbound-company-block"
+    >
+      <div className="report-dash-company-head-shell">
+        <div className="report-dash-tree-rail report-dash-tree-rail--level2">
+          <button
+            type="button"
+            className={`report-dash-tree-node-btn${expanded ? " is-open" : ""}`}
+            aria-expanded={expanded}
+            aria-label={`${expanded ? "收起" : "展开"}${row.salesGroup}下属客户明细`}
+            title={expanded ? "收起客户" : "展开客户"}
+            onClick={onToggle}
+          >
+            <span className="report-dash-tree-node-btn-inner" aria-hidden />
+          </button>
+        </div>
+        <div className={`report-dash-company-row report-dash-tree-card--level2${expanded ? " is-open" : ""}`}>
+          <button
+            type="button"
+            className="report-dash-company-toggle"
+            onClick={onToggle}
+            aria-expanded={expanded}
+          >
+            <div className="report-dash-company-title">
+              <span className="report-dash-chevron" aria-hidden>
+                {expanded ? "▲" : "▼"}
+              </span>
+              <span className="report-dash-company-name">{row.salesGroup}</span>
+            </div>
+          </button>
+          <div className="report-dash-company-metrics sales-dash-inbound-level2-metrics">
+            <InboundCountTiles counts={row.counts} dense />
+          </div>
+        </div>
+      </div>
+      {expanded && (
+        <div className="report-dash-company-nested">
+          <div className="report-dash-tree-branch report-dash-tree-branch--depth2">
+            <CustomerNameRows customers={row.customers} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InboundModelBlock({
   row,
   expanded,
@@ -319,12 +432,16 @@ export function SalesDashboardTab() {
   const [openTeam, setOpenTeam] = useState<string | null>(null);
   const [drillOpenMaterial, setDrillOpenMaterial] = useState(false);
   const [openModel, setOpenModel] = useState<string | null>(null);
+  const [drillOpenCustomer, setDrillOpenCustomer] = useState(false);
+  const [openTeamCustomer, setOpenTeamCustomer] = useState<string | null>(null);
 
   useEffect(() => {
     setDrillOpen(false);
     setOpenTeam(null);
     setDrillOpenMaterial(false);
     setOpenModel(null);
+    setDrillOpenCustomer(false);
+    setOpenTeamCustomer(null);
   }, [dataVersion]);
 
   const toggleDrill = useCallback(() => {
@@ -351,6 +468,18 @@ export function SalesDashboardTab() {
     setOpenModel((prev) => (prev === name ? null : name));
   }, []);
 
+  const toggleDrillCustomer = useCallback(() => {
+    setDrillOpenCustomer((o) => {
+      const next = !o;
+      if (!next) setOpenTeamCustomer(null);
+      return next;
+    });
+  }, []);
+
+  const toggleTeamCustomer = useCallback((name: string) => {
+    setOpenTeamCustomer((prev) => (prev === name ? null : name));
+  }, []);
+
   if (!dash.ok) {
     return (
       <div className="report-dashboard-tab">
@@ -359,7 +488,7 @@ export function SalesDashboardTab() {
     );
   }
 
-  const { rowCount, unclassifiedCount, segmentResult, summary, teams, models } = dash;
+  const { rowCount, unclassifiedCount, segmentResult, summary, teams, models, teamCustomers } = dash;
   const { fragmented_limit: fl, high_limit: hl } = segmentResult.thresholds;
 
   return (
@@ -423,7 +552,7 @@ export function SalesDashboardTab() {
               aria-expanded={drillOpenMaterial}
             >
               <div className="report-dash-summary-head">
-                <span className="report-dash-summary-title">订货单分布（团队/人维度）指标图</span>
+                <span className="report-dash-summary-title">订货单分布（产品维度）</span>
                 <span className="report-dash-chevron" aria-hidden>
                   {drillOpenMaterial ? "▲" : "▼"}
                 </span>
@@ -450,6 +579,51 @@ export function SalesDashboardTab() {
                     row={mrow}
                     expanded={openModel === mrow.model}
                     onToggle={() => toggleModel(mrow.model)}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="report-dash-tree-node report-dash-tree-node--level1 sales-dash-inbound-third-tree">
+          <div
+            className={`report-dash-summary-card report-dash-tree-card--level1${drillOpenCustomer ? " is-open" : ""}`}
+          >
+            <button
+              type="button"
+              className="report-dash-summary-toggle"
+              onClick={toggleDrillCustomer}
+              aria-expanded={drillOpenCustomer}
+            >
+              <div className="report-dash-summary-head">
+                <span className="report-dash-summary-title">订货单分布（客户维度）</span>
+                <span className="report-dash-chevron" aria-hidden>
+                  {drillOpenCustomer ? "▲" : "▼"}
+                </span>
+              </div>
+            </button>
+            <div className="report-dash-summary-metrics">
+              <InboundCountTiles counts={summary} />
+            </div>
+            <span className="muted tiny report-dash-summary-hint">
+              与上图同一分档口径。二级按<strong>销售组</strong>汇总，三级按<strong>客户名称</strong>汇总（销售分析底表）。点击标题下钻。
+            </span>
+          </div>
+        </div>
+
+        {drillOpenCustomer && (
+          <div className="report-dash-tree-branch report-dash-tree-branch--depth1">
+            <div className="report-dash-companies">
+              {teamCustomers.length === 0 ? (
+                <p className="muted small">暂无销售组数据。</p>
+              ) : (
+                teamCustomers.map((trow) => (
+                  <InboundTeamCustomerBlock
+                    key={trow.salesGroup}
+                    row={trow}
+                    expanded={openTeamCustomer === trow.salesGroup}
+                    onToggle={() => toggleTeamCustomer(trow.salesGroup)}
                   />
                 ))
               )}

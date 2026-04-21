@@ -99,7 +99,7 @@ export default function App() {
           style={{ display: page === "salesForecast" ? "block" : "none" }}
           aria-hidden={paneHidden("salesForecast")}
         >
-          <SalesForecast />
+          <SalesForecast active={page === "salesForecast"} />
         </div>
         <div
           className="app-route-pane"

@@ -838,7 +838,8 @@ button.linkish:hover {
   --report-dash-metric-pad-x: 16px;
 }
 
-.sales-dash-inbound-second-tree {
+.sales-dash-inbound-second-tree,
+.sales-dash-inbound-third-tree {
   margin-top: 1.25rem;
 }
 
@@ -3149,6 +3150,28 @@ button.app-config-md-download.linkish {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.sales-data-preview-card-head-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.sales-data-preview-card-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.sales-data-preview-fold-btn {
+  flex-shrink: 0;
+}
+
+.sales-data-preview-collapsed-hint {
+  margin: 0 0 4px;
 }
 
 .sales-disassemble-btn {
