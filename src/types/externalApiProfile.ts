@@ -50,4 +50,12 @@ export interface ExternalApiProfile {
    * 「清洗后的 JSON」页签：自然语言描述的清洗规则（保存后随原始 JSON 更新自动重算）。
    */
   jsonCleaningRules?: string;
+  /**
+   * 清洗方式：`script` 为本地脚本（新建接口默认）；`llm` 为自然语言 + 大模型。未持久化时由 `normalizeProfile` 按是否已有非空规则推断。
+   */
+  jsonCleaningMode?: "llm" | "script";
+  /**
+   * `jsonCleaningMode === "script"` 时的分组配置 JSON 字符串（见 `dataHubScriptCleaning` 类型）。
+   */
+  jsonCleaningScriptSpec?: string;
 }

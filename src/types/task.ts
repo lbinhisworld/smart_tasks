@@ -76,6 +76,8 @@ export interface Task {
   receiverDepartment?: string;
   /** 看板「日报计划提取任务」行 id（`PendingDailyPlanTaskRow.id`）；写入后用于跨页展示已生成任务编号 */
   sourcePendingDailyPlanRowId?: string;
+  /** 若任务由「报告管理 · 晨会议题」派发则写入议题 id（`MorningTopic.id`） */
+  sourceMorningTopicId?: string;
   /** 进度跟踪：按保存顺序排列的时间线（展示时可按日期排序） */
   progressTracking?: TaskProgressEntry[];
   /** 最近一次智能表格 Webhook 推送是否成功（未配置 Webhook 时不写入该字段） */

@@ -1,5 +1,8 @@
 node_modules
 dist
+
+# 个人 Git/GitHub 学习笔记已迁至 ~/Documents/cursor/，勿在仓库内重建同名文件以免误提交
+docs/git-github-learning-notes.md
 .DS_Store
 .env
 *.local
