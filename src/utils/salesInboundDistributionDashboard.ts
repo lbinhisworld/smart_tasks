@@ -157,14 +157,14 @@ export function buildSalesInboundDashboards(): SalesInboundDashboardsBundle {
     if (!people.has(p)) people.set(p, emptyCounts());
     bump(people.get(p)!, label);
 
-    const cust = (r.customerName ?? "").trim() || "（未填客户名称）";
+    const cust = (r.customerName ?? "").trim() || "-";
     if (!teamCustomerMap.has(g)) teamCustomerMap.set(g, new Map());
     const customers = teamCustomerMap.get(g)!;
     if (!customers.has(cust)) customers.set(cust, emptyCounts());
     bump(customers.get(cust)!, label);
 
-    const model = tagText(r.materialTags, "model") || "（未解析型号）";
-    const name = tagText(r.materialTags, "name") || "（未解析品名）";
+    const model = tagText(r.materialTags, "model") || "-";
+    const name = tagText(r.materialTags, "name") || "-";
     if (!modelMap.has(model)) modelMap.set(model, new Map());
     const names = modelMap.get(model)!;
     if (!names.has(name)) names.set(name, emptyCounts());

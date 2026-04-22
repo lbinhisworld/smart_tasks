@@ -3422,6 +3422,27 @@ button.app-config-md-download.linkish {
   gap: 16px;
 }
 
+.sales-forecast-main-card .sales-forecast-view-tabs {
+  margin-top: 6px;
+  margin-bottom: 0;
+}
+
+.sales-forecast-tab-panel {
+  padding: 12px 0 4px;
+}
+
+.sales-forecast-tab-panel--debug {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 6px;
+}
+
+.sales-forecast-user-mode-hint {
+  margin: 0;
+  padding: 4px 0 8px;
+}
+
 .sales-forecast-upload-row {
   display: flex;
   flex-wrap: wrap;
@@ -3510,6 +3531,610 @@ button.app-config-md-download.linkish {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.sales-analysis-base-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.sales-customer-inbound-dimension-card {
+  margin-top: 1.25rem;
+}
+
+.sales-customer-inbound-dim-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sales-customer-inbound-dim-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.sales-customer-inbound-dim-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.sales-customer-dim-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.sales-customer-inbound-dimension-card {
+  /* 与维表行内最右侧四列指标对齐的固定“轨道”宽度（同一段内各层一致，左侧树仍独立缩进） */
+  --dim-metric-rail: min(56rem, 100%);
+}
+
+/* 公司级（每客户外框）：深蓝主题 + 悬停浮起阴影 */
+.sales-customer-dim-block {
+  --dim-metric-rail: min(56rem, 100%);
+  border: 1px solid #5d8ce8;
+  border-radius: 12px;
+  background: linear-gradient(168deg, #dbe9ff 0%, #c7dcfc 40%, #b3cef7 100%);
+  overflow: hidden;
+  box-shadow:
+    0 4px 16px rgba(30, 64, 175, 0.16),
+    0 1px 3px rgba(15, 23, 42, 0.08);
+  transition: box-shadow 0.22s ease, transform 0.22s ease, border-color 0.22s ease;
+}
+
+.sales-customer-dim-block:hover {
+  border-color: #3b6fd9;
+  box-shadow:
+    0 12px 32px rgba(30, 58, 138, 0.26),
+    0 4px 12px rgba(15, 23, 42, 0.1);
+  transform: translateY(-2px);
+}
+
+.sales-customer-dim-block.is-open {
+  border-color: #4178e0;
+  box-shadow:
+    0 6px 22px rgba(30, 64, 175, 0.2),
+    0 2px 6px rgba(15, 23, 42, 0.08);
+}
+
+.sales-customer-dim-block-shell {
+  padding: 10px 12px 12px;
+}
+
+.sales-customer-dim-block-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.sales-customer-dim-block-toggle:hover .sales-customer-dim-block-name {
+  text-decoration: underline;
+}
+
+.sales-customer-dim-block-chevron {
+  flex-shrink: 0;
+  width: 1.25rem;
+  color: #1d4ed8;
+  font-size: 0.75rem;
+  line-height: 1.5rem;
+}
+
+.sales-customer-dim-block-name {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 6px;
+  min-width: 0;
+  line-height: 1.45;
+  color: #0c1e3a;
+}
+
+.sales-customer-dim-block-dim-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #3d4c63;
+  flex-shrink: 0;
+}
+
+.sales-customer-dim-block-name-value {
+  font-weight: 600;
+  font-size: 1rem;
+  min-width: 0;
+  word-break: break-word;
+  color: #0c1e3a;
+}
+
+.sales-customer-dim-label-icon {
+  flex-shrink: 0;
+  display: block;
+  color: #64748b;
+  opacity: 0.95;
+}
+
+.sales-customer-dim-block .sales-customer-dim-label-icon {
+  color: #2563eb;
+  opacity: 0.9;
+}
+
+.sales-customer-dim-level-card--model .sales-customer-dim-label-icon {
+  color: #1d4ed8;
+}
+
+.sales-customer-dim-level-card--name .sales-customer-dim-label-icon {
+  color: #15803d;
+}
+
+.sales-customer-dim-level-card--spec .sales-customer-dim-label-icon {
+  color: #b45309;
+}
+
+.sales-customer-dim-level-card--grammage .sales-customer-dim-label-icon {
+  color: #be185d;
+}
+
+.sales-customer-dim-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 10px 18px;
+}
+
+.sales-customer-dim-metrics--compact {
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 8px 14px;
+}
+
+/* 与维表行右侧固定带对齐：日期、下单次数、三种间隔/周期指标共五列 */
+.sales-customer-dim-metrics--align-strip {
+  display: grid;
+  /* 等列间距 + 列最小宽度，避免标题换行 */
+  grid-template-columns: repeat(5, minmax(9.5rem, 1fr));
+  row-gap: 6px;
+  column-gap: 12px;
+  width: 100%;
+  align-items: start;
+}
+
+.sales-customer-dim-metrics--align-strip.sales-customer-dim-metrics--compact {
+  grid-template-columns: repeat(5, minmax(9.25rem, 1fr));
+  row-gap: 5px;
+  column-gap: 12px;
+}
+
+.sales-customer-dim-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sales-customer-dim-metric-label {
+  font-size: 0.78rem;
+  color: #5c6578;
+  line-height: 1.3;
+}
+
+.sales-customer-dim-metric-value {
+  font-size: 0.9rem;
+  color: #1a1d24;
+  word-break: break-word;
+}
+
+.sales-customer-dim-metric--compact .sales-customer-dim-metric-label {
+  font-size: 0.74rem;
+}
+
+.sales-customer-dim-metric--compact .sales-customer-dim-metric-value {
+  font-size: 0.85rem;
+}
+
+.sales-customer-dim-metric--strip,
+.sales-customer-dim-metrics--align-strip .sales-customer-dim-metric {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.sales-customer-dim-metric--strip .sales-customer-dim-metric-label,
+.sales-customer-dim-metrics--align-strip .sales-customer-dim-metric-label {
+  width: 100%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.sales-customer-dim-metric--strip .sales-customer-dim-metric-value,
+.sales-customer-dim-metrics--align-strip .sales-customer-dim-metric-value {
+  width: 100%;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+/* 「计算下单次数」：计算中条 + 旋转指示；完成后绿底白字（.tiny-btn 定义在后，用合并选择器保证底边留给进度条） */
+.sales-order-count-compute-btn {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  min-width: 7.5rem;
+  overflow: hidden;
+  vertical-align: middle;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.sales-order-count-compute-btn-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  z-index: 1;
+}
+
+.sales-order-count-compute-btn-label {
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.sales-order-count-compute-btn-spinner {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  border: 2px solid rgba(37, 99, 235, 0.25);
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: sales-order-count-compute-spin 0.7s linear infinite;
+}
+
+.sales-order-count-compute-btn--running {
+  border-color: #93c5fd;
+  background: linear-gradient(180deg, #f0f6ff 0%, #e8f1ff 100%);
+  color: #1e3a5f;
+  animation: sales-order-count-compute-breathe 1.1s ease-in-out infinite;
+}
+
+.sales-order-count-compute-btn-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(15, 23, 42, 0.08);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.sales-order-count-compute-btn-fill {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  background: linear-gradient(90deg, #3b82f6, #2563eb);
+  transition: width 0.12s ease-out;
+  border-radius: 0 1px 0 0;
+}
+
+.sales-order-count-compute-btn--done {
+  background: #16a34a;
+  color: #fff;
+  border-color: #15803d;
+  animation: none;
+}
+
+.sales-order-count-compute-btn--done:hover:not(:disabled) {
+  background: #22c55e;
+  color: #fff;
+  border-color: #16a34a;
+}
+
+.sales-order-count-compute-btn--done:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.sales-order-count-compute-btn--done .sales-order-count-compute-btn-label {
+  color: #fff;
+}
+
+.sales-order-count-compute-btn:disabled.sales-order-count-compute-btn--running {
+  cursor: wait;
+  opacity: 0.95;
+}
+
+@keyframes sales-order-count-compute-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes sales-order-count-compute-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sales-order-count-compute-btn--running {
+    animation: none;
+  }
+
+  .sales-order-count-compute-btn-spinner {
+    animation: sales-order-count-compute-spin 0.9s linear infinite;
+  }
+}
+
+.sales-customer-dim-sku-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 12px 12px;
+  border-top: 1px dashed #dce0e8;
+  background: #fff;
+}
+
+.sales-customer-dim-sku-item {
+  padding: 12px 0;
+  border-bottom: 1px solid #eef0f4;
+}
+
+.sales-customer-dim-sku-item:last-child {
+  border-bottom: none;
+  padding-bottom: 4px;
+}
+
+.sales-customer-dim-sku-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #2a3140;
+}
+
+.sales-customer-dim-sku-sep {
+  color: #9aa3b2;
+  font-weight: 400;
+}
+
+.sales-customer-dim-sku-empty {
+  margin: 0;
+  padding: 10px 14px 14px 36px;
+  border-top: 1px dashed #dce0e8;
+  background: #fff;
+}
+
+.sales-customer-dim-models-root {
+  border-top: 1px dashed #dce0e8;
+  background: #fff;
+}
+
+.sales-customer-dim-model-item {
+  padding-bottom: 12px;
+}
+
+.sales-customer-dim-nested {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0 0 0 14px;
+  border-left: 2px solid #e8eaef;
+}
+
+.sales-customer-dim-level-line {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px 14px;
+  min-width: 0;
+  width: 100%;
+}
+
+.sales-customer-dim-level-tree {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sales-customer-dim-level-metric-wrap {
+  flex: 0 0 var(--dim-metric-rail, min(56rem, 100%));
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 与 .sales-material-tag 系列颜色一致：总体用 id 档作为「汇总行」；型号/品名/规格/克重与 kind 一一对应 */
+.sales-customer-dim-level-card {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 8px 10px 9px;
+  margin-bottom: 0;
+  box-sizing: border-box;
+}
+
+.sales-customer-dim-block .sales-customer-dim-level-card--total {
+  border-color: #4f7fd4;
+  background: color-mix(in srgb, #1d4ed8 9%, #f0f6ff 91%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.sales-customer-dim-level-card--total {
+  border-color: #c7d2fe;
+  /* 与 .sales-material-tag--id 一系（无外层 .sales-customer-dim-block 时回退） */
+  background: color-mix(in srgb, #e0e7ff 55%, #fff);
+}
+
+.sales-customer-dim-level-card--model {
+  border-color: #bfdbfe;
+  background: color-mix(in srgb, #dbeafe 55%, #fff);
+  /* 与 .sales-material-tag--model 一致 */
+}
+
+.sales-customer-dim-level-card--name {
+  border-color: #bbf7d0;
+  background: color-mix(in srgb, #dcfce7 55%, #fff);
+}
+
+.sales-customer-dim-level-card--spec {
+  border-color: #fde68a;
+  background: color-mix(in srgb, #fef3c7 55%, #fff);
+}
+
+.sales-customer-dim-level-card--grammage {
+  border-color: #fbcfe8;
+  background: color-mix(in srgb, #fce7f3 55%, #fff);
+}
+
+@supports not (background: color-mix(in srgb, #fff 50%, #000)) {
+  .sales-customer-dim-block .sales-customer-dim-level-card--total {
+    background: #e4efff;
+  }
+  .sales-customer-dim-level-card--total {
+    background: #eef2ff;
+  }
+  .sales-customer-dim-level-card--model {
+    background: #eff6ff;
+  }
+  .sales-customer-dim-level-card--name {
+    background: #f0fdf4;
+  }
+  .sales-customer-dim-level-card--spec {
+    background: #fffbeb;
+  }
+  .sales-customer-dim-level-card--grammage {
+    background: #fdf2f8;
+  }
+}
+
+.sales-customer-dim-block .sales-customer-dim-metric-label {
+  color: #475569;
+}
+
+.sales-customer-dim-block .sales-customer-dim-metric-value {
+  color: #0f172a;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sales-customer-dim-block {
+    transition: none;
+  }
+  .sales-customer-dim-block:hover {
+    transform: none;
+  }
+}
+
+.sales-customer-dim-node-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+/* 最末级克重无下钻，占位列与有折叠按钮的型号/品名/规格行对齐 */
+.sales-customer-dim-node-toggle--grammage-leaf {
+  cursor: default;
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+
+.sales-customer-dim-node-chevron-spacer {
+  display: block;
+  width: 1rem;
+  min-height: 1.35rem;
+  flex-shrink: 0;
+}
+
+.sales-customer-dim-node-toggle:hover .sales-customer-dim-level-value {
+  text-decoration: underline;
+}
+
+.sales-customer-dim-node-chevron {
+  flex-shrink: 0;
+  width: 1rem;
+  text-align: center;
+  font-size: 0.65rem;
+  line-height: 1.35rem;
+  color: #5c6578;
+}
+
+.sales-customer-dim-node-toggle-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 800px) {
+  .sales-customer-dim-level-line {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .sales-customer-dim-level-metric-wrap {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+}
+
+.sales-customer-dim-level-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.sales-customer-dim-level-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.sales-customer-dim-level-value {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #1f2937;
+  word-break: break-word;
+}
+
+.sales-customer-dim-name-item,
+.sales-customer-dim-spec-item,
+.sales-customer-dim-grammage-item {
+  padding-bottom: 8px;
 }
 
 .sales-order-segment-btn {
@@ -4545,6 +5170,11 @@ button.app-config-md-download.linkish {
 .tiny-btn {
   padding: 6px 10px;
   font-size: 0.8rem;
+}
+
+.ghost-btn.tiny-btn.sales-order-count-compute-btn {
+  padding: 5px 11px 7px;
+  min-width: 7.5rem;
 }
 
 .prompt-preview {

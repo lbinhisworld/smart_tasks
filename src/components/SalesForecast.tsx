@@ -1,5 +1,5 @@
 /**
- * @fileoverview 销售预测：上传销售数据 CSV，保存后表格预览。
+ * @fileoverview 销售预测：主卡片下「用户显示模式 / 调试显示模式」双 Tab；CSV、底表与客户进货周期性分析等均在调试 Tab。
  *
  * @module SalesForecast
  */
@@ -19,17 +19,48 @@ import {
   type OrderSegmentLabel,
   type OrderSegmentResult,
 } from "../utils/calculateOrderSegments";
+import {
+  listCustomerPathsInTreeOrder,
+  listGrammageOrderCountStepsFromBase,
+  listGrammagePathsInTreeOrder,
+  listModelPathsInTreeOrder,
+  listNamePathsInTreeOrder,
+  listSpecPathsInTreeOrder,
+  orderCountByAggregatingFromChildren,
+  setOrderCountOnDimension,
+  setOrderIntervalStdDevOnDimension,
+} from "../utils/applyOrderCountToDimension";
+import {
+  buildCustomerInboundDimensionFromAnalysis,
+  type CustomerInboundDimensionMetrics,
+  type CustomerInboundDimensionRow,
+  type CustomerInboundModelRow,
+} from "../utils/buildCustomerInboundDimensionFromAnalysis";
 import { decodeTextBytesAuto } from "../utils/decodeTextBytesAuto";
 import { formatCustomerPreviewName } from "../utils/formatCustomerPreviewName";
 import { parseCsvText } from "../utils/parseCsvText";
 import { MATERIAL_TAG_LEGEND } from "../utils/parseMaterialCode";
+import {
+  applyOrderIntervalMeanToDimension,
+  applyPeriodicityToDimension,
+  averageOrderIntervalStdDevFromDirectChildren,
+  computeOrderIntervalStdDevForGrammagePath,
+  orderIntervalStdDevForNamePathWithFallback,
+  orderIntervalStdDevForSpecPathWithFallback,
+} from "../utils/customerOrderIntervalStats";
 import {
   buildSalesAnalysisBaseFromPreview,
   findSalesCustomerSourceColumnIndex,
   SALES_ANALYSIS_BASE_HEADERS,
   type SalesAnalysisBaseRow,
 } from "../utils/salesAnalysisBaseFromPreview";
-import { loadSalesForecastPersisted, saveSalesForecastPersisted } from "../utils/salesForecastStorage";
+import {
+  loadSalesForecastPersisted,
+  readSalesForecastViewTab,
+  saveSalesForecastPersisted,
+  writeSalesForecastViewTab,
+} from "../utils/salesForecastStorage";
+import { CustomerDimLabelIcon } from "./CustomerDimLabelIcon";
 
 const CSV_ACCEPT = ".csv,text/csv";
 
@@ -39,18 +70,325 @@ const ORDER_QTY_SEG_TAG_CLASS: Record<OrderSegmentLabel, string> = {
   零散: "sales-order-qty-seg-tag sales-order-qty-seg-tag--fragmented",
 };
 
+function formatCustomerDimMetricValue(label: string, raw: string): string {
+  const v = raw.trim();
+  if (v === "" || v === "—" || v === "-") return "—";
+  if (label === "订货间隔的标准差" || label === "订货间隔的平均值") {
+    const n = Number(String(v).replace(/,/g, ""));
+    if (Number.isFinite(n)) return n.toFixed(2);
+    return v;
+  }
+  return v;
+}
+
+function CustomerDimMetricGrid({
+  lastOrderDate,
+  orderCount,
+  orderIntervalStdDev,
+  orderIntervalMean,
+  periodicityLabel,
+  compact,
+  alignStrip,
+}: CustomerInboundDimensionMetrics & { compact?: boolean; alignStrip?: boolean }) {
+  const item = (label: string, value: string) => (
+    <div
+      className={[
+        compact ? "sales-customer-dim-metric sales-customer-dim-metric--compact" : "sales-customer-dim-metric",
+        alignStrip ? "sales-customer-dim-metric--strip" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <span className="sales-customer-dim-metric-label">{label}</span>
+      <span className="sales-customer-dim-metric-value">
+        {formatCustomerDimMetricValue(label, value)}
+      </span>
+    </div>
+  );
+  const rootClass = [
+    compact ? "sales-customer-dim-metrics sales-customer-dim-metrics--compact" : "sales-customer-dim-metrics",
+    alignStrip ? "sales-customer-dim-metrics--align-strip" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <div className={rootClass}>
+      {item("最近一次下单日期", lastOrderDate)}
+      {item("下单次数", orderCount)}
+      {item("订货间隔的标准差", orderIntervalStdDev)}
+      {item("订货间隔的平均值", orderIntervalMean)}
+      {item("周期性标签", periodicityLabel)}
+    </div>
+  );
+}
+
+function CustomerDimensionModelTree({
+  customerName,
+  models,
+}: {
+  customerName: string;
+  models: CustomerInboundModelRow[];
+}) {
+  /** 记入 Set 的节点为收起；默认空集表示各级展开 */
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    setCollapsed(new Set());
+  }, [customerName]);
+
+  const toggleNode = useCallback((key: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const isOpen = (key: string) => !collapsed.has(key);
+
+  if (models.length === 0) {
+    return <p className="muted small sales-customer-dim-sku-empty">该客户暂无型号下钻数据。</p>;
+  }
+
+  return (
+    <ul className="sales-customer-dim-sku-list sales-customer-dim-models-root" role="group">
+      {models.map((mod) => {
+        const modelKey = `m\u001f${customerName}\u001f${mod.model}`;
+        const modelOpen = isOpen(modelKey);
+        return (
+          <li
+            key={modelKey}
+            className={`sales-customer-dim-model-item${modelOpen ? "" : " sales-customer-dim-node--collapsed"}`}
+          >
+            <div className="sales-customer-dim-level-card sales-customer-dim-level-card--model">
+              <div className="sales-customer-dim-level-line">
+                <div className="sales-customer-dim-level-tree">
+                  <button
+                    type="button"
+                    className="sales-customer-dim-node-toggle"
+                    aria-expanded={modelOpen}
+                    onClick={() => toggleNode(modelKey)}
+                    aria-label={`${modelOpen ? "收起" : "展开"}型号「${mod.model}」的品名下钻`}
+                  >
+                    <span className="sales-customer-dim-node-chevron" aria-hidden>
+                      {modelOpen ? "▲" : "▼"}
+                    </span>
+                    <span className="sales-customer-dim-node-toggle-main">
+                      <span className="sales-customer-dim-level-label">
+                        <CustomerDimLabelIcon kind="model" />
+                        型号
+                      </span>
+                      <span className="sales-customer-dim-level-value">{mod.model}</span>
+                    </span>
+                  </button>
+                </div>
+                <div className="sales-customer-dim-level-metric-wrap">
+                  <CustomerDimMetricGrid
+                    lastOrderDate={mod.lastOrderDate}
+                    orderCount={mod.orderCount}
+                    orderIntervalStdDev={mod.orderIntervalStdDev}
+                    orderIntervalMean={mod.orderIntervalMean}
+                    periodicityLabel={mod.periodicityLabel}
+                    compact
+                    alignStrip
+                  />
+                </div>
+              </div>
+            </div>
+            {modelOpen && (
+              <ul className="sales-customer-dim-nested sales-customer-dim-level--names" role="group">
+                {mod.names.map((nam) => {
+                  const nameKey = `n\u001f${customerName}\u001f${mod.model}\u001f${nam.productName}`;
+                  const nameOpen = isOpen(nameKey);
+                  return (
+                    <li
+                      key={nameKey}
+                      className={`sales-customer-dim-name-item${nameOpen ? "" : " sales-customer-dim-node--collapsed"}`}
+                    >
+                      <div className="sales-customer-dim-level-card sales-customer-dim-level-card--name">
+                        <div className="sales-customer-dim-level-line">
+                          <div className="sales-customer-dim-level-tree">
+                            <button
+                              type="button"
+                              className="sales-customer-dim-node-toggle"
+                              aria-expanded={nameOpen}
+                              onClick={() => toggleNode(nameKey)}
+                              aria-label={`${nameOpen ? "收起" : "展开"}品名「${nam.productName}」的规格/克重下钻`}
+                            >
+                              <span className="sales-customer-dim-node-chevron" aria-hidden>
+                                {nameOpen ? "▲" : "▼"}
+                              </span>
+                              <span className="sales-customer-dim-node-toggle-main">
+                                <span className="sales-customer-dim-level-label">
+                                  <CustomerDimLabelIcon kind="name" />
+                                  品名
+                                </span>
+                                <span className="sales-customer-dim-level-value">{nam.productName}</span>
+                              </span>
+                            </button>
+                          </div>
+                          <div className="sales-customer-dim-level-metric-wrap">
+                            <CustomerDimMetricGrid
+                              lastOrderDate={nam.lastOrderDate}
+                              orderCount={nam.orderCount}
+                              orderIntervalStdDev={nam.orderIntervalStdDev}
+                              orderIntervalMean={nam.orderIntervalMean}
+                              periodicityLabel={nam.periodicityLabel}
+                              compact
+                              alignStrip
+                              />
+                          </div>
+                        </div>
+                      </div>
+                      {nameOpen && (
+                        <ul className="sales-customer-dim-nested sales-customer-dim-level--specs" role="group">
+                          {nam.specs.map((sp) => {
+                            const specKey = `s\u001f${customerName}\u001f${mod.model}\u001f${nam.productName}\u001f${sp.spec}`;
+                            const specOpen = isOpen(specKey);
+                            return (
+                              <li
+                                key={specKey}
+                                className={`sales-customer-dim-spec-item${specOpen ? "" : " sales-customer-dim-node--collapsed"}`}
+                              >
+                                <div className="sales-customer-dim-level-card sales-customer-dim-level-card--spec">
+                                  <div className="sales-customer-dim-level-line">
+                                    <div className="sales-customer-dim-level-tree">
+                                      <button
+                                        type="button"
+                                        className="sales-customer-dim-node-toggle"
+                                        aria-expanded={specOpen}
+                                        onClick={() => toggleNode(specKey)}
+                                        aria-label={`${specOpen ? "收起" : "展开"}规格「${sp.spec}」的克重下钻`}
+                                      >
+                                        <span className="sales-customer-dim-node-chevron" aria-hidden>
+                                          {specOpen ? "▲" : "▼"}
+                                        </span>
+                                        <span className="sales-customer-dim-node-toggle-main">
+                                          <span className="sales-customer-dim-level-label">
+                                            <CustomerDimLabelIcon kind="spec" />
+                                            规格
+                                          </span>
+                                          <span className="sales-customer-dim-level-value">{sp.spec}</span>
+                                        </span>
+                                      </button>
+                                    </div>
+                                    <div className="sales-customer-dim-level-metric-wrap">
+                                      <CustomerDimMetricGrid
+                                        lastOrderDate={sp.lastOrderDate}
+                                        orderCount={sp.orderCount}
+                                        orderIntervalStdDev={sp.orderIntervalStdDev}
+                                        orderIntervalMean={sp.orderIntervalMean}
+                                        periodicityLabel={sp.periodicityLabel}
+                                        compact
+                                        alignStrip
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                                {specOpen && (
+                                  <ul
+                                    className="sales-customer-dim-nested sales-customer-dim-level--grammages"
+                                    role="group"
+                                  >
+                                    {sp.grammages.map((gr) => {
+                                      const grKey = `g\u001f${customerName}\u001f${mod.model}\u001f${nam.productName}\u001f${sp.spec}\u001f${gr.grammage}`;
+                                      return (
+                                        <li key={grKey} className="sales-customer-dim-grammage-item">
+                                          <div className="sales-customer-dim-level-card sales-customer-dim-level-card--grammage">
+                                            <div className="sales-customer-dim-level-line">
+                                              <div className="sales-customer-dim-level-tree">
+                                                <span className="sales-customer-dim-node-toggle sales-customer-dim-node-toggle--grammage-leaf">
+                                                  <span className="sales-customer-dim-node-chevron" aria-hidden>
+                                                    <span className="sales-customer-dim-node-chevron-spacer" />
+                                                  </span>
+                                                  <span className="sales-customer-dim-node-toggle-main">
+                                                    <span className="sales-customer-dim-level-label">
+                                                      <CustomerDimLabelIcon kind="grammage" />
+                                                      克重
+                                                    </span>
+                                                    <span className="sales-customer-dim-level-value">
+                                                      {gr.grammage}
+                                                    </span>
+                                                  </span>
+                                                </span>
+                                              </div>
+                                              <div className="sales-customer-dim-level-metric-wrap">
+                                                <CustomerDimMetricGrid
+                                                  lastOrderDate={gr.lastOrderDate}
+                                                  orderCount={gr.orderCount}
+                                                  orderIntervalStdDev={gr.orderIntervalStdDev}
+                                                  orderIntervalMean={gr.orderIntervalMean}
+                                                  periodicityLabel={gr.periodicityLabel}
+                                                  compact
+                                                  alignStrip
+                                                />
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function readInitialSalesForecastState(): {
   preview: { headers: string[]; rows: string[][]; fileName: string } | null;
   analysisBase: { rows: SalesAnalysisBaseRow[]; missingHint: string | null } | null;
   orderSegments: OrderSegmentResult | null;
+  customerInboundDimension: CustomerInboundDimensionRow[] | null;
+  orderCountComputeCompleted: boolean;
+  orderIntervalStdDevComputeCompleted: boolean;
 } {
   const stored = loadSalesForecastPersisted();
-  if (!stored) return { preview: null, analysisBase: null, orderSegments: null };
+  if (!stored) {
+    return {
+      preview: null,
+      analysisBase: null,
+      orderSegments: null,
+      customerInboundDimension: null,
+      orderCountComputeCompleted: false,
+      orderIntervalStdDevComputeCompleted: false,
+    };
+  }
   return {
     preview: stored.preview,
     analysisBase: stored.analysisBase,
     orderSegments: stored.orderSegments ?? null,
+    customerInboundDimension: stored.customerInboundDimension ?? null,
+    orderCountComputeCompleted: stored.orderCountComputeCompleted,
+    orderIntervalStdDevComputeCompleted: stored.orderIntervalStdDevComputeCompleted,
   };
+}
+
+function resolveInitialForecastViewTab(
+  persisted: ReturnType<typeof readInitialSalesForecastState>,
+): "user" | "debug" {
+  const fromStorage = readSalesForecastViewTab();
+  if (fromStorage) return fromStorage;
+  if (
+    persisted.analysisBase ||
+    (persisted.customerInboundDimension && persisted.customerInboundDimension.length > 0)
+  ) {
+    return "debug";
+  }
+  return "user";
 }
 
 export type SalesForecastProps = {
@@ -75,11 +413,41 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     initialPersisted.orderSegments,
   );
   const [orderSegmentsBusy, setOrderSegmentsBusy] = useState(false);
+  const [customerDimensionBusy, setCustomerDimensionBusy] = useState(false);
+  const [customerInboundDimension, setCustomerInboundDimension] = useState<CustomerInboundDimensionRow[] | null>(
+    initialPersisted.customerInboundDimension,
+  );
   /** 有底表时默认折叠原始 CSV 预览，拆解成功后自动折叠，仍可手动展开 */
   const [previewCollapsed, setPreviewCollapsed] = useState(() => Boolean(initialPersisted.analysisBase));
+  const [openCustomerDimIds, setOpenCustomerDimIds] = useState<Set<string>>(
+    () => new Set(initialPersisted.customerInboundDimension?.map((r) => r.customerName) ?? []),
+  );
+  const [orderCountComputeBusy, setOrderCountComputeBusy] = useState(false);
+  /** 分步计算进度，用于按钮内条与文案 */
+  const [orderCountProgress, setOrderCountProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+  /** 最近一轮分步计算是否已跑完；用于绿底白字态（与持久化 orderCountComputeCompleted 同步） */
+  const [orderCountComputeSuccess, setOrderCountComputeSuccess] = useState(
+    () => initialPersisted.orderCountComputeCompleted,
+  );
+  const orderCountInflightRef = useRef(false);
+  const [orderIntervalStdDevComputeSuccess, setOrderIntervalStdDevComputeSuccess] = useState(
+    () => initialPersisted.orderIntervalStdDevComputeCompleted,
+  );
+  const [orderIntervalStdDevComputeBusy, setOrderIntervalStdDevComputeBusy] = useState(false);
+  const [orderIntervalStdDevProgress, setOrderIntervalStdDevProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+  const orderIntervalStdDevInflightRef = useRef(false);
+  const [forecastViewTab, setForecastViewTab] = useState<"user" | "debug">(() =>
+    resolveInitialForecastViewTab(initialPersisted),
+  );
   const prevActiveRef = useRef<boolean | null>(null);
 
-  /** 从其他页签切回销售预测时，用已持久化的预览 / 底表 / 数量分类覆盖本地 state（与 save 写入一致） */
+  /** 从其他页签切回销售预测时，用已持久化的预览 / 底表 / 数量分类 / 客户进货周期性分析 覆盖本地 state（与 save 写入一致） */
   useEffect(() => {
     const prev = prevActiveRef.current;
     prevActiveRef.current = active;
@@ -91,10 +459,32 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     setPreview(stored.preview);
     setAnalysisBase(stored.analysisBase);
     setOrderSegments(stored.orderSegments ?? null);
+    setCustomerInboundDimension(stored.customerInboundDimension ?? null);
+    if (stored.customerInboundDimension?.length) {
+      setOpenCustomerDimIds(new Set(stored.customerInboundDimension.map((r) => r.customerName)));
+    } else {
+      setOpenCustomerDimIds(new Set());
+    }
+    const tabPref = readSalesForecastViewTab();
+    if (tabPref) {
+      setForecastViewTab(tabPref);
+    } else if (stored.analysisBase || (stored.customerInboundDimension?.length ?? 0) > 0) {
+      setForecastViewTab("debug");
+    }
+    setOrderCountComputeSuccess(stored.orderCountComputeCompleted);
+    setOrderIntervalStdDevComputeSuccess(stored.orderIntervalStdDevComputeCompleted);
   }, [active]);
 
   useEffect(() => {
-    if (!analysisBase) setOrderSegments(null);
+    if (!analysisBase) {
+      setOrderSegments(null);
+      setCustomerInboundDimension(null);
+      setOpenCustomerDimIds(new Set());
+      setCustomerDimensionBusy(false);
+      setOrderCountComputeSuccess(false);
+      setOrderCountProgress(null);
+      setOrderIntervalStdDevComputeSuccess(false);
+    }
   }, [analysisBase]);
 
   const onPickFile = useCallback((e: ChangeEvent<HTMLInputElement>) => {
@@ -167,7 +557,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
         setAnalysisBase(null);
         setPreviewCollapsed(false);
         setPreview(nextPreview);
-        if (!saveSalesForecastPersisted(nextPreview, null, null)) {
+        if (!saveSalesForecastPersisted(nextPreview, null, null, null, { orderCountComputeCompleted: false, orderIntervalStdDevComputeCompleted: false })) {
           setError("数据已显示，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复。");
         }
       } catch (err) {
@@ -200,8 +590,12 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     };
     setAnalysisBase(nextAnalysis);
     setOrderSegments(null);
+    setOrderCountComputeSuccess(false);
+    setOrderIntervalStdDevComputeSuccess(false);
+    setCustomerInboundDimension(null);
+    setOpenCustomerDimIds(new Set());
     setPreviewCollapsed(true);
-    if (!saveSalesForecastPersisted(preview, nextAnalysis, null)) {
+    if (!saveSalesForecastPersisted(preview, nextAnalysis, null, null, { orderCountComputeCompleted: false, orderIntervalStdDevComputeCompleted: false })) {
       setError("底表已生成，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复底表。");
     }
   }, [preview]);
@@ -209,29 +603,254 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
   const onGenerateOrderSegments = useCallback(() => {
     if (!analysisBase?.rows.length || !preview) return;
     setError(null);
+    if (customerDimensionBusy || orderCountComputeBusy || orderIntervalStdDevComputeBusy) return;
     setOrderSegmentsBusy(true);
     const quantities = analysisBase.rows.map((r) => r.quantity);
     const snapshotAnalysis = analysisBase;
     const snapshotPreview = preview;
+    const snapshotCustomerDim = customerInboundDimension;
     window.setTimeout(() => {
       try {
         const result = calculateOrderSegments(quantities);
         const { fragmented_limit: fl, high_limit: hl } = result.thresholds;
         if (fl === 0 && hl === 0) {
           setOrderSegments(null);
-          void saveSalesForecastPersisted(snapshotPreview, snapshotAnalysis, null);
+          void saveSalesForecastPersisted(snapshotPreview, snapshotAnalysis, null, snapshotCustomerDim);
           setError("数量列中没有可用的正数，无法生成分类阈值。");
           return;
         }
         setOrderSegments(result);
-        if (!saveSalesForecastPersisted(snapshotPreview, snapshotAnalysis, result)) {
+        if (!saveSalesForecastPersisted(snapshotPreview, snapshotAnalysis, result, snapshotCustomerDim)) {
           setError("分类已生成，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复分类。");
         }
       } finally {
         setOrderSegmentsBusy(false);
       }
     }, 0);
-  }, [analysisBase, preview]);
+  }, [analysisBase, preview, customerInboundDimension, customerDimensionBusy, orderCountComputeBusy, orderIntervalStdDevComputeBusy]);
+
+  const onGenerateCustomerDimension = useCallback(() => {
+    if (!analysisBase?.rows.length || !preview) return;
+    setError(null);
+    if (orderSegmentsBusy || orderCountComputeBusy || orderIntervalStdDevComputeBusy) return;
+    setCustomerDimensionBusy(true);
+    const snapshotAnalysis = analysisBase;
+    const snapshotPreview = preview;
+    const snapshotOrderSegments = orderSegments;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          const next = buildCustomerInboundDimensionFromAnalysis(snapshotAnalysis.rows);
+          setOrderCountComputeSuccess(false);
+          setOrderCountProgress(null);
+          setOrderIntervalStdDevComputeSuccess(false);
+          setCustomerInboundDimension(next);
+          setOpenCustomerDimIds(new Set(next.map((r) => r.customerName)));
+          if (!saveSalesForecastPersisted(snapshotPreview, snapshotAnalysis, snapshotOrderSegments, next, { orderCountComputeCompleted: false, orderIntervalStdDevComputeCompleted: false })) {
+            setError("进货周期性分析已生成，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复。");
+          }
+        } finally {
+          setCustomerDimensionBusy(false);
+        }
+      });
+    });
+  }, [
+    analysisBase,
+    preview,
+    orderSegments,
+    orderSegmentsBusy,
+    orderCountComputeBusy,
+    orderIntervalStdDevComputeBusy,
+  ]);
+
+  const toggleCustomerDimOpen = useCallback((customerName: string) => {
+    setOpenCustomerDimIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(customerName)) next.delete(customerName);
+      else next.add(customerName);
+      return next;
+    });
+  }, []);
+
+  const onComputeOrderCounts = useCallback(() => {
+    if (orderCountInflightRef.current) return;
+    if (!customerInboundDimension?.length || !analysisBase?.rows.length || !preview) return;
+    if (orderSegmentsBusy || customerDimensionBusy || orderIntervalStdDevComputeBusy) return;
+    setError(null);
+    const dim0 = customerInboundDimension;
+    const baseRows = analysisBase.rows;
+    const gramSteps = listGrammageOrderCountStepsFromBase(dim0, baseRows);
+    const specPaths = listSpecPathsInTreeOrder(dim0);
+    const namePaths = listNamePathsInTreeOrder(dim0);
+    const modelPaths = listModelPathsInTreeOrder(dim0);
+    const custPaths = listCustomerPathsInTreeOrder(dim0);
+    const gL = gramSteps.length;
+    const sL = specPaths.length;
+    const nL = namePaths.length;
+    const mL = modelPaths.length;
+    const cL = custPaths.length;
+    const total = gL + sL + nL + mL + cL;
+    if (total === 0) return;
+    orderCountInflightRef.current = true;
+    setOrderCountComputeSuccess(false);
+    setOrderCountProgress({ current: 0, total });
+    setOrderCountComputeBusy(true);
+    let acc: CustomerInboundDimensionRow[] = dim0;
+    let i = 0;
+    const step = () => {
+      if (i >= total) {
+        orderCountInflightRef.current = false;
+        setOrderCountProgress(null);
+        setOrderCountComputeBusy(false);
+        if (!saveSalesForecastPersisted(preview, analysisBase, orderSegments, acc, { orderCountComputeCompleted: true })) {
+          setOrderCountComputeSuccess(false);
+          setError("下单次数已更新，但保存本地失败（可能超出浏览器配额）。");
+        } else {
+          setOrderCountComputeSuccess(true);
+        }
+        return;
+      }
+      if (i < gL) {
+        const s = gramSteps[i]!;
+        acc = setOrderCountOnDimension(acc, s.path, s.orderCount);
+      } else if (i < gL + sL) {
+        const p = specPaths[i - gL]!;
+        acc = setOrderCountOnDimension(acc, p, orderCountByAggregatingFromChildren(acc, p));
+      } else if (i < gL + sL + nL) {
+        const p = namePaths[i - gL - sL]!;
+        acc = setOrderCountOnDimension(acc, p, orderCountByAggregatingFromChildren(acc, p));
+      } else if (i < gL + sL + nL + mL) {
+        const p = modelPaths[i - gL - sL - nL]!;
+        acc = setOrderCountOnDimension(acc, p, orderCountByAggregatingFromChildren(acc, p));
+      } else {
+        const p = custPaths[i - gL - sL - nL - mL]!;
+        acc = setOrderCountOnDimension(acc, p, orderCountByAggregatingFromChildren(acc, p));
+      }
+      setCustomerInboundDimension(acc);
+      i += 1;
+      setOrderCountProgress({ current: i, total });
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }, [
+    customerInboundDimension,
+    analysisBase,
+    preview,
+    orderSegments,
+    orderSegmentsBusy,
+    customerDimensionBusy,
+    orderIntervalStdDevComputeBusy,
+  ]);
+
+  const onComputeOrderIntervalStdDev = useCallback(() => {
+    if (orderIntervalStdDevInflightRef.current) return;
+    if (!customerInboundDimension?.length || !analysisBase?.rows.length || !preview) return;
+    if (orderSegmentsBusy || customerDimensionBusy || orderCountComputeBusy) return;
+    setError(null);
+    const dim0 = customerInboundDimension;
+    const baseRows = analysisBase.rows;
+    const gramPaths = listGrammagePathsInTreeOrder(dim0);
+    const specPaths = listSpecPathsInTreeOrder(dim0);
+    const namePaths = listNamePathsInTreeOrder(dim0);
+    const modelPaths = listModelPathsInTreeOrder(dim0);
+    const custPaths = listCustomerPathsInTreeOrder(dim0);
+    const gL = gramPaths.length;
+    const sL = specPaths.length;
+    const nL = namePaths.length;
+    const mL = modelPaths.length;
+    const cL = custPaths.length;
+    const total = gL + sL + nL + mL + cL;
+    if (total === 0) return;
+    orderIntervalStdDevInflightRef.current = true;
+    setOrderIntervalStdDevComputeSuccess(false);
+    setOrderIntervalStdDevProgress({ current: 0, total });
+    setOrderIntervalStdDevComputeBusy(true);
+    let acc: CustomerInboundDimensionRow[] = dim0;
+    let i = 0;
+    const step = () => {
+      if (i >= total) {
+        orderIntervalStdDevInflightRef.current = false;
+        setOrderIntervalStdDevProgress(null);
+        setOrderIntervalStdDevComputeBusy(false);
+        if (!saveSalesForecastPersisted(preview, analysisBase, orderSegments, acc, { orderIntervalStdDevComputeCompleted: true })) {
+          setOrderIntervalStdDevComputeSuccess(false);
+          setError("订货间隔标准差已写入界面，但保存本地失败（可能超出浏览器配额）。");
+        } else {
+          setOrderIntervalStdDevComputeSuccess(true);
+        }
+        return;
+      }
+      if (i < gL) {
+        const path = gramPaths[i]!;
+        acc = setOrderIntervalStdDevOnDimension(
+          acc,
+          path,
+          computeOrderIntervalStdDevForGrammagePath(baseRows, path),
+        );
+      } else if (i < gL + sL) {
+        const p = specPaths[i - gL]!;
+        acc = setOrderIntervalStdDevOnDimension(
+          acc,
+          p,
+          orderIntervalStdDevForSpecPathWithFallback(acc, baseRows, p),
+        );
+      } else if (i < gL + sL + nL) {
+        const p = namePaths[i - gL - sL]!;
+        acc = setOrderIntervalStdDevOnDimension(
+          acc,
+          p,
+          orderIntervalStdDevForNamePathWithFallback(acc, baseRows, p),
+        );
+      } else if (i < gL + sL + nL + mL) {
+        const p = modelPaths[i - gL - sL - nL]!;
+        acc = setOrderIntervalStdDevOnDimension(
+          acc,
+          p,
+          averageOrderIntervalStdDevFromDirectChildren(acc, p),
+        );
+      } else {
+        const p = custPaths[i - gL - sL - nL - mL]!;
+        acc = setOrderIntervalStdDevOnDimension(
+          acc,
+          p,
+          averageOrderIntervalStdDevFromDirectChildren(acc, p),
+        );
+      }
+      setCustomerInboundDimension(acc);
+      i += 1;
+      setOrderIntervalStdDevProgress({ current: i, total });
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }, [
+    customerInboundDimension,
+    analysisBase,
+    preview,
+    orderSegments,
+    orderSegmentsBusy,
+    customerDimensionBusy,
+    orderCountComputeBusy,
+  ]);
+
+  const onComputeOrderIntervalMean = useCallback(() => {
+    if (!customerInboundDimension?.length || !analysisBase?.rows.length || !preview) return;
+    setError(null);
+    const next = applyOrderIntervalMeanToDimension(customerInboundDimension, analysisBase.rows);
+    setCustomerInboundDimension(next);
+    if (!saveSalesForecastPersisted(preview, analysisBase, orderSegments, next)) {
+      setError("订货间隔平均值已写入界面，但保存本地失败（可能超出浏览器配额）。");
+    }
+  }, [customerInboundDimension, analysisBase, preview, orderSegments]);
+
+  const onGeneratePeriodicityLabels = useCallback(() => {
+    if (!customerInboundDimension?.length || !analysisBase?.rows.length || !preview) return;
+    setError(null);
+    const next = applyPeriodicityToDimension(customerInboundDimension, analysisBase.rows);
+    setCustomerInboundDimension(next);
+    if (!saveSalesForecastPersisted(preview, analysisBase, orderSegments, next)) {
+      setError("周期性标签已写入界面，但保存本地失败（可能超出浏览器配额）。");
+    }
+  }, [customerInboundDimension, analysisBase, preview, orderSegments]);
 
   const analysisTableHeaders = useMemo(() => {
     if (orderSegments) {
@@ -244,7 +863,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
 
   return (
     <div className="sales-forecast-page">
-      <section className="card">
+      <section className="card sales-forecast-main-card">
         <div className="card-head">
           <div>
             <h2>销售预测</h2>
@@ -257,37 +876,81 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
           </div>
         </div>
 
-        <div className="sales-forecast-upload-row">
-          <input
-            id={uploadId}
-            type="file"
-            className="sr-only"
-            accept={CSV_ACCEPT}
-            onChange={onPickFile}
-          />
-          <label htmlFor={uploadId} className="upload-label sales-forecast-file-label">
-            <span className="upload-btn">选择 CSV 文件</span>
-            <span className="muted tiny">
-              {pickedFile?.name ?? preview?.fileName ?? "未选择文件"}
-            </span>
-          </label>
+        <div
+          className="report-main-tabs sales-forecast-view-tabs"
+          role="tablist"
+          aria-label="销售预测视图"
+        >
           <button
             type="button"
-            className="primary-btn"
-            disabled={!pickedFile || busy}
-            onClick={() => void onSave()}
+            role="tab"
+            aria-selected={forecastViewTab === "user"}
+            className={`report-main-tab${forecastViewTab === "user" ? " is-active" : ""}`}
+            onClick={() => {
+            setForecastViewTab("user");
+            writeSalesForecastViewTab("user");
+          }}
           >
-            {busy ? "读取中…" : "保存"}
+            用户显示模式
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={forecastViewTab === "debug"}
+            className={`report-main-tab${forecastViewTab === "debug" ? " is-active" : ""}`}
+            onClick={() => {
+            setForecastViewTab("debug");
+            writeSalesForecastViewTab("debug");
+          }}
+          >
+            调试显示模式
           </button>
         </div>
-        {error && (
-          <p className="sales-forecast-error" role="alert">
-            {error}
-          </p>
-        )}
-      </section>
 
-      {preview && (
+        {forecastViewTab === "user" && (
+          <div className="sales-forecast-tab-panel" role="tabpanel" aria-label="用户显示模式">
+            <p className="muted small sales-forecast-user-mode-hint">
+              用户显示模式：对外精简视图将放在此 Tab。数据准备与完整调试请切换到「调试显示模式」。
+            </p>
+          </div>
+        )}
+
+        {forecastViewTab === "debug" && (
+          <div
+            className="sales-forecast-tab-panel sales-forecast-tab-panel--debug"
+            role="tabpanel"
+            aria-label="调试显示模式"
+          >
+            <div className="sales-forecast-upload-row">
+              <input
+                id={uploadId}
+                type="file"
+                className="sr-only"
+                accept={CSV_ACCEPT}
+                onChange={onPickFile}
+              />
+              <label htmlFor={uploadId} className="upload-label sales-forecast-file-label">
+                <span className="upload-btn">选择 CSV 文件</span>
+                <span className="muted tiny">
+                  {pickedFile?.name ?? preview?.fileName ?? "未选择文件"}
+                </span>
+              </label>
+              <button
+                type="button"
+                className="primary-btn"
+                disabled={!pickedFile || busy}
+                onClick={() => void onSave()}
+              >
+                {busy ? "读取中…" : "保存"}
+              </button>
+            </div>
+            {error && (
+              <p className="sales-forecast-error" role="alert">
+                {error}
+              </p>
+            )}
+
+            {preview && (
         <section className="card sales-data-preview-card">
           <div className="card-head tight sales-data-preview-card-head">
             <div className="sales-data-preview-card-head-left">
@@ -347,20 +1010,46 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
         <section className="card sales-analysis-base-card">
           <div className="card-head tight sales-analysis-base-card-head">
             <h3 className="sales-analysis-base-title">销售分析底表</h3>
-            <button
-              type="button"
-              className="primary-btn sales-order-segment-btn"
-              disabled={orderSegmentsBusy}
-              aria-busy={orderSegmentsBusy}
-              onClick={onGenerateOrderSegments}
-            >
-              <span className="sales-order-segment-btn-inner">
-                {orderSegmentsBusy && (
-                  <span className="sales-order-segment-btn-spinner" aria-hidden />
-                )}
-                {orderSegmentsBusy ? "计算中…" : "生成数量分类"}
-              </span>
-            </button>
+            <div className="sales-analysis-base-card-actions">
+              <button
+                type="button"
+                className="primary-btn sales-order-segment-btn"
+                disabled={
+                  orderSegmentsBusy ||
+                  customerDimensionBusy ||
+                  orderCountComputeBusy ||
+                  orderIntervalStdDevComputeBusy
+                }
+                aria-busy={orderSegmentsBusy}
+                onClick={onGenerateOrderSegments}
+              >
+                <span className="sales-order-segment-btn-inner">
+                  {orderSegmentsBusy && (
+                    <span className="sales-order-segment-btn-spinner" aria-hidden />
+                  )}
+                  {orderSegmentsBusy ? "计算中…" : "生成数量分类"}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="primary-btn sales-order-segment-btn sales-customer-dim-btn"
+                disabled={
+                  orderSegmentsBusy ||
+                  customerDimensionBusy ||
+                  orderCountComputeBusy ||
+                  orderIntervalStdDevComputeBusy
+                }
+                aria-busy={customerDimensionBusy}
+                onClick={onGenerateCustomerDimension}
+              >
+                <span className="sales-order-segment-btn-inner">
+                  {customerDimensionBusy && (
+                    <span className="sales-order-segment-btn-spinner" aria-hidden />
+                  )}
+                  {customerDimensionBusy ? "启动中…" : "启动进货周期性分析"}
+                </span>
+              </button>
+            </div>
           </div>
           {analysisBase.missingHint && (
             <p className="muted small sales-analysis-base-hint" role="status">
@@ -501,6 +1190,203 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
           )}
         </section>
       )}
+
+      {customerInboundDimension !== null && analysisBase && (
+        <section className="card sales-customer-inbound-dimension-card">
+          <div className="card-head tight sales-customer-inbound-dim-head">
+            <h3 className="sales-customer-inbound-dim-title">客户进货周期性分析</h3>
+            <div className="sales-customer-inbound-dim-actions">
+              <button
+                type="button"
+                className={[
+                  "ghost-btn",
+                  "tiny-btn",
+                  "sales-order-count-compute-btn",
+                  orderCountComputeBusy ? "sales-order-count-compute-btn--running" : "",
+                  !orderCountComputeBusy && orderCountComputeSuccess
+                    ? "sales-order-count-compute-btn--done"
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                disabled={
+                  orderCountComputeBusy ||
+                  orderSegmentsBusy ||
+                  customerDimensionBusy ||
+                  !analysisBase?.rows.length
+                }
+                aria-busy={orderCountComputeBusy}
+                aria-label={
+                  orderCountComputeBusy && orderCountProgress
+                    ? `计算下单次数进度 ${orderCountProgress.current} / ${orderCountProgress.total}`
+                    : "计算下单次数"
+                }
+                onClick={onComputeOrderCounts}
+              >
+                <span className="sales-order-count-compute-btn-inner">
+                  {orderCountComputeBusy && <span className="sales-order-count-compute-btn-spinner" aria-hidden />}
+                  <span className="sales-order-count-compute-btn-label">
+                    {orderCountComputeBusy
+                      ? orderCountProgress
+                        ? `计算中 ${orderCountProgress.current}/${orderCountProgress.total}`
+                        : "计算中…"
+                      : "计算下单次数"}
+                  </span>
+                </span>
+                {orderCountComputeBusy && orderCountProgress && orderCountProgress.total > 0 && (
+                  <span className="sales-order-count-compute-btn-track" aria-hidden>
+                    <span
+                      className="sales-order-count-compute-btn-fill"
+                      style={{
+                        width: `${(orderCountProgress.current / orderCountProgress.total) * 100}%`,
+                      }}
+                    />
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className={[
+                  "ghost-btn",
+                  "tiny-btn",
+                  "sales-order-count-compute-btn",
+                  orderIntervalStdDevComputeBusy ? "sales-order-count-compute-btn--running" : "",
+                  !orderIntervalStdDevComputeBusy && orderIntervalStdDevComputeSuccess
+                    ? "sales-order-count-compute-btn--done"
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                disabled={
+                  orderCountComputeBusy ||
+                  orderIntervalStdDevComputeBusy ||
+                  orderSegmentsBusy ||
+                  customerDimensionBusy ||
+                  !analysisBase?.rows.length
+                }
+                aria-busy={orderIntervalStdDevComputeBusy}
+                aria-label={
+                  orderIntervalStdDevComputeBusy && orderIntervalStdDevProgress
+                    ? `计算订货间隔标准差进度 ${orderIntervalStdDevProgress.current} / ${orderIntervalStdDevProgress.total}`
+                    : "计算订货间隔标准差"
+                }
+                onClick={onComputeOrderIntervalStdDev}
+              >
+                <span className="sales-order-count-compute-btn-inner">
+                  {orderIntervalStdDevComputeBusy && (
+                    <span className="sales-order-count-compute-btn-spinner" aria-hidden />
+                  )}
+                  <span className="sales-order-count-compute-btn-label">
+                    {orderIntervalStdDevComputeBusy
+                      ? orderIntervalStdDevProgress
+                        ? `计算中 ${orderIntervalStdDevProgress.current}/${orderIntervalStdDevProgress.total}`
+                        : "计算中…"
+                      : "计算订货间隔标准差"}
+                  </span>
+                </span>
+                {orderIntervalStdDevComputeBusy &&
+                  orderIntervalStdDevProgress &&
+                  orderIntervalStdDevProgress.total > 0 && (
+                    <span className="sales-order-count-compute-btn-track" aria-hidden>
+                      <span
+                        className="sales-order-count-compute-btn-fill"
+                        style={{
+                          width: `${(orderIntervalStdDevProgress.current / orderIntervalStdDevProgress.total) * 100}%`,
+                        }}
+                      />
+                    </span>
+                  )}
+              </button>
+              <button
+                type="button"
+                className="ghost-btn tiny-btn"
+                disabled={
+                  orderCountComputeBusy ||
+                  orderIntervalStdDevComputeBusy ||
+                  orderSegmentsBusy ||
+                  customerDimensionBusy
+                }
+                onClick={onComputeOrderIntervalMean}
+              >
+                计算订货间隔平均值
+              </button>
+              <button
+                type="button"
+                className="ghost-btn tiny-btn"
+                disabled={
+                  orderCountComputeBusy ||
+                  orderIntervalStdDevComputeBusy ||
+                  orderSegmentsBusy ||
+                  customerDimensionBusy
+                }
+                onClick={onGeneratePeriodicityLabels}
+              >
+                生成周期性标签
+              </button>
+            </div>
+          </div>
+          <p className="muted small sales-data-preview-meta">
+            共 {customerInboundDimension.length} 个客户（按客户名称去重）。本分析结果与底表一并写入本机浏览器
+            <strong>localStorage</strong>，刷新或切换应用内页面后仍保留。点击「启动进货周期性分析」后会<strong>默认展开</strong>
+            全部客户。卡片顶部为<strong>总体</strong>；下方为按底表扫描得到的<strong>型号 → 品名 → 规格 → 克重</strong>
+            层级视图（仅包含有订货记录的组合）；<strong>型号、品名、规格</strong>左侧三角仅折叠/展开<strong>下级</strong>，当前行五列指标始终显示；克重为最末级无下钻。「计算下单次数」分两轮：先对底表逐克重行计数，再自底向上将规格/品名/型号/客户依次写为「直接下级的下单次数加总」；订货间隔等仍按原逻辑。各计算/生成按钮会写入各级对应单元格。
+          </p>
+          <div className="sales-customer-dim-tree" role="tree" aria-label="客户进货周期性分析层级树">
+            {customerInboundDimension.map((row) => {
+              const expanded = openCustomerDimIds.has(row.customerName);
+              return (
+                <div
+                  key={row.customerName}
+                  className={`sales-customer-dim-block${expanded ? " is-open" : ""}`}
+                  role="treeitem"
+                  aria-expanded={expanded}
+                >
+                  <div className="sales-customer-dim-block-shell">
+                    <div className="sales-customer-dim-level-card sales-customer-dim-level-card--total">
+                      <div className="sales-customer-dim-level-line">
+                        <div className="sales-customer-dim-level-tree">
+                          <button
+                            type="button"
+                            className="sales-customer-dim-block-toggle"
+                            onClick={() => toggleCustomerDimOpen(row.customerName)}
+                            aria-expanded={expanded}
+                            aria-label={`${expanded ? "收起" : "展开"}客户「${row.customerName}」的型号下钻`}
+                          >
+                            <span className="sales-customer-dim-block-chevron" aria-hidden>
+                              {expanded ? "▲" : "▼"}
+                            </span>
+                            <span className="sales-customer-dim-block-name">
+                              <CustomerDimLabelIcon kind="customer" />
+                              <span className="sales-customer-dim-block-dim-label">客户</span>
+                              <span className="sales-customer-dim-block-name-value">{row.customerName}</span>
+                            </span>
+                          </button>
+                        </div>
+                        <div className="sales-customer-dim-level-metric-wrap">
+                          <CustomerDimMetricGrid
+                            lastOrderDate={row.lastOrderDate}
+                            orderCount={row.orderCount}
+                            orderIntervalStdDev={row.orderIntervalStdDev}
+                            orderIntervalMean={row.orderIntervalMean}
+                            periodicityLabel={row.periodicityLabel}
+                            alignStrip
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  {expanded && (
+                    <CustomerDimensionModelTree customerName={row.customerName} models={row.models} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
