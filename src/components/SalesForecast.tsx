@@ -40,6 +40,10 @@ import {
   type CustomerInboundModelRow,
 } from "../utils/buildCustomerInboundDimensionFromAnalysis";
 import { decodeTextBytesAuto } from "../utils/decodeTextBytesAuto";
+import {
+  listInboundPeriodicityPatterns,
+  type InboundPeriodicityPatternItem,
+} from "../utils/inboundPeriodicityPatternMining";
 import { formatCustomerPreviewName } from "../utils/formatCustomerPreviewName";
 import { parseCsvText } from "../utils/parseCsvText";
 import { MATERIAL_TAG_LEGEND } from "../utils/parseMaterialCode";
@@ -72,6 +76,81 @@ const ORDER_QTY_SEG_TAG_CLASS: Record<OrderSegmentLabel, string> = {
   低: "sales-order-qty-seg-tag sales-order-qty-seg-tag--low",
   零散: "sales-order-qty-seg-tag sales-order-qty-seg-tag--fragmented",
 };
+
+/** 进货周期性模式挖掘：产品参数与底表「物料标签」同款 pill */
+function InboundPatternProductParamTags({ item }: { item: InboundPeriodicityPatternItem }) {
+  return (
+    <div
+      className="sales-material-tags-cell sales-inbound-pattern-materials"
+      role="group"
+      aria-label="产品参数模式"
+    >
+      {item.isProductScopeTotal ? (
+        <span className="sales-material-tag sales-material-tag--id">总体</span>
+      ) : (
+        item.productMaterialTags.map((t) => (
+          <span key={t.kind} className={`sales-material-tag sales-material-tag--${t.kind}`}>
+            {t.text}
+          </span>
+        ))
+      )}
+    </div>
+  );
+}
+
+function InboundPatternSubcardView({ p }: { p: InboundPeriodicityPatternItem }) {
+  const isStrong = p.periodicityLabel.trim().split("\n")[0]?.trim() === "强周期性";
+  return (
+    <div
+      className={[
+        "sales-inbound-pattern-subcard",
+        isStrong ? "sales-inbound-pattern-subcard--strong" : "sales-inbound-pattern-subcard--weak",
+      ].join(" ")}
+      role="listitem"
+    >
+      <div className="sales-inbound-pattern-subhead">
+        <span className="sales-inbound-pattern-subhead-title task-text-wrap">{p.customerName}</span>
+        <span
+          className="sales-inbound-pattern-cv-pill"
+          title={`CV ${p.cv}`}
+          aria-label={`CV 值 ${p.cv}`}
+        >
+          {p.cv}
+        </span>
+      </div>
+      <div className="sales-inbound-pattern-subbody">
+        <dl className="sales-inbound-pattern-dl">
+          <div className="sales-inbound-pattern-row--inline">
+            <dt>销售名称</dt>
+            <dd className="task-text-wrap">{p.salesName}</dd>
+          </div>
+          <div className="sales-inbound-pattern-dl--param">
+            <dt>产品参数模式</dt>
+            <dd>
+              <InboundPatternProductParamTags item={p} />
+            </dd>
+          </div>
+          <div className="sales-inbound-pattern-row--inline">
+            <dt>上一次发货日期</dt>
+            <dd className="task-text-wrap">{p.lastShipDate}</dd>
+          </div>
+          <div className="sales-inbound-pattern-row--inline">
+            <dt>订货间隔平均值</dt>
+            <dd>{p.orderIntervalMean}</dd>
+          </div>
+          <div className="sales-inbound-pattern-row--inline">
+            <dt>预计下次下单日期</dt>
+            <dd className="task-text-wrap">{p.nextOrderDate}</dd>
+          </div>
+          <div className="sales-inbound-pattern-row--inline">
+            <dt>对应平均下单量</dt>
+            <dd>{p.avgOrderQty}</dd>
+          </div>
+        </dl>
+      </div>
+    </div>
+  );
+}
 
 function formatCustomerDimMetricValue(label: string, raw: string): string {
   const v = raw.trim();
@@ -111,6 +190,21 @@ function CustomerDimPeriodicityValue({ value, alignStrip }: { value: string; ali
         >
           {main}
         </span>
+        {sub ? <span className="sales-customer-dim-periodicity-cvnote">{sub}</span> : null}
+      </div>
+    );
+  }
+  if (main === "不规则") {
+    return (
+      <div
+        className={[
+          "sales-customer-dim-periodicity-wrap",
+          alignStrip ? "sales-customer-dim-periodicity-wrap--end" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        <span className="sales-customer-dim-periodicity-irregular">{main}</span>
         {sub ? <span className="sales-customer-dim-periodicity-cvnote">{sub}</span> : null}
       </div>
     );
@@ -521,6 +615,8 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
   const [periodicityLabelsComputeSuccess, setPeriodicityLabelsComputeSuccess] = useState(
     () => initialPersisted.periodicityLabelsComputeCompleted,
   );
+  const [inboundPatternStrongSectionOpen, setInboundPatternStrongSectionOpen] = useState(true);
+  const [inboundPatternWeakSectionOpen, setInboundPatternWeakSectionOpen] = useState(true);
   const [forecastViewTab, setForecastViewTab] = useState<"user" | "debug">(() =>
     resolveInitialForecastViewTab(initialPersisted),
   );
@@ -1111,6 +1207,25 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     return [...SALES_ANALYSIS_BASE_HEADERS];
   }, [orderSegments]);
 
+  const { inboundPatternsStrong, inboundPatternsWeak } = useMemo(() => {
+    if (
+      !periodicityLabelsComputeSuccess ||
+      !customerInboundDimension?.length ||
+      !analysisBase?.rows.length
+    ) {
+      return { inboundPatternsStrong: [] as InboundPeriodicityPatternItem[], inboundPatternsWeak: [] };
+    }
+    const all = listInboundPeriodicityPatterns(customerInboundDimension, analysisBase.rows);
+    const strong: InboundPeriodicityPatternItem[] = [];
+    const weak: InboundPeriodicityPatternItem[] = [];
+    for (const p of all) {
+      const first = p.periodicityLabel.trim().split("\n")[0]?.trim();
+      if (first === "强周期性") strong.push(p);
+      else if (first === "弱周期性") weak.push(p);
+    }
+    return { inboundPatternsStrong: strong, inboundPatternsWeak: weak };
+  }, [analysisBase, customerInboundDimension, periodicityLabelsComputeSuccess]);
+
   return (
     <div className="sales-forecast-page">
       <section className="card sales-forecast-main-card">
@@ -1446,6 +1561,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
       )}
 
       {customerInboundDimension !== null && analysisBase && (
+        <>
         <section className="card sales-customer-inbound-dimension-card">
           <div className="card-head tight sales-customer-inbound-dim-head">
             <h3 className="sales-customer-inbound-dim-title">客户进货周期性分析</h3>
@@ -1726,6 +1842,105 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
             })}
           </div>
         </section>
+        <section
+          className="card sales-inbound-periodicity-pattern-card"
+          aria-label="进货周期性模式挖掘"
+        >
+          <div className="card-head tight sales-inbound-pattern-head">
+            <h3 className="sales-inbound-pattern-title">进货周期性模式挖掘</h3>
+          </div>
+          {!periodicityLabelsComputeSuccess ? (
+            <p className="muted small sales-inbound-pattern-hint">
+              请先在「客户进货周期性分析」中完成「生成周期性标签」；全部生成完成后，此处会列出主标签为「强周期性」或「弱周期性」的节点，并补全预计下次下单与平均量等。
+            </p>
+          ) : inboundPatternsStrong.length === 0 && inboundPatternsWeak.length === 0 ? (
+            <p className="muted small sales-inbound-pattern-hint">
+              当前没有主标签为「强周期性」或「弱周期性」的节点（可能均为「不规则」或未标注）。
+            </p>
+          ) : (
+            <div className="sales-inbound-pattern-buckets">
+              <div
+                className="sales-inbound-pattern-bucket sales-inbound-pattern-bucket--strong"
+                aria-label="强进货周期模式"
+              >
+                <div className="sales-inbound-pattern-bucket-head">
+                  <button
+                    type="button"
+                    className="sales-inbound-pattern-bucket-toggle"
+                    onClick={() => setInboundPatternStrongSectionOpen((o) => !o)}
+                    aria-expanded={inboundPatternStrongSectionOpen}
+                    id="inbound-pattern-strong-section-toggle"
+                  >
+                    <span className="sales-inbound-pattern-bucket-chevron" aria-hidden>
+                      {inboundPatternStrongSectionOpen ? "▼" : "▶"}
+                    </span>
+                    <span className="sales-inbound-pattern-bucket-title">强进货周期模式</span>
+                    <span className="sales-inbound-pattern-bucket-count" aria-hidden>
+                      （{inboundPatternsStrong.length}）
+                    </span>
+                  </button>
+                </div>
+                {inboundPatternStrongSectionOpen ? (
+                  inboundPatternsStrong.length === 0 ? (
+                    <p className="muted small sales-inbound-pattern-bucket-empty" role="status">
+                      暂无强周期性模式。
+                    </p>
+                  ) : (
+                    <div
+                      className="sales-inbound-pattern-list"
+                      role="list"
+                      aria-labelledby="inbound-pattern-strong-section-toggle"
+                    >
+                      {inboundPatternsStrong.map((p) => (
+                        <InboundPatternSubcardView key={p.key} p={p} />
+                      ))}
+                    </div>
+                  )
+                ) : null}
+              </div>
+              <div
+                className="sales-inbound-pattern-bucket sales-inbound-pattern-bucket--weak"
+                aria-label="弱进货周期模式"
+              >
+                <div className="sales-inbound-pattern-bucket-head">
+                  <button
+                    type="button"
+                    className="sales-inbound-pattern-bucket-toggle"
+                    onClick={() => setInboundPatternWeakSectionOpen((o) => !o)}
+                    aria-expanded={inboundPatternWeakSectionOpen}
+                    id="inbound-pattern-weak-section-toggle"
+                  >
+                    <span className="sales-inbound-pattern-bucket-chevron" aria-hidden>
+                      {inboundPatternWeakSectionOpen ? "▼" : "▶"}
+                    </span>
+                    <span className="sales-inbound-pattern-bucket-title">弱进货周期模式</span>
+                    <span className="sales-inbound-pattern-bucket-count" aria-hidden>
+                      （{inboundPatternsWeak.length}）
+                    </span>
+                  </button>
+                </div>
+                {inboundPatternWeakSectionOpen ? (
+                  inboundPatternsWeak.length === 0 ? (
+                    <p className="muted small sales-inbound-pattern-bucket-empty" role="status">
+                      暂无弱周期性模式。
+                    </p>
+                  ) : (
+                    <div
+                      className="sales-inbound-pattern-list"
+                      role="list"
+                      aria-labelledby="inbound-pattern-weak-section-toggle"
+                    >
+                      {inboundPatternsWeak.map((p) => (
+                        <InboundPatternSubcardView key={p.key} p={p} />
+                      ))}
+                    </div>
+                  )
+                ) : null}
+              </div>
+            </div>
+          )}
+        </section>
+        </>
       )}
           </div>
         )}
