@@ -17,7 +17,12 @@ import {
   dimSpecKey,
 } from "./buildCustomerInboundDimensionFromAnalysis";
 import type { OrderCountCellPath } from "./applyOrderCountToDimension";
-import { listGrammageOrderCountStepsFromBase } from "./applyOrderCountToDimension";
+import {
+  listGrammageOrderCountStepsFromBase,
+  listOrderIntervalMeanCellPathsTopDown,
+  setOrderIntervalMeanOnDimension,
+  setPeriodicityLabelOnDimension,
+} from "./applyOrderCountToDimension";
 import type { SalesAnalysisBaseRow } from "./salesAnalysisBaseFromPreview";
 
 function parseDateToMs(s: string): number | null {
@@ -96,17 +101,70 @@ export function formatIntervalDaysStat(n: number | null): string {
   return n.toFixed(2);
 }
 
-export function suggestPeriodicityLabel(mean: number | null, std: number | null): string {
-  if (mean === null || !Number.isFinite(mean) || mean < 0) return "";
-  if (std !== null && Number.isFinite(std) && mean > 1e-6) {
-    const cv = std / mean;
-    if (cv < 0.25) return "间隔较稳定";
-    if (cv < 0.55) return "间隔中等波动";
-    return "间隔波动较大";
+/** 变异系数阈值：std/mean 小于等于 0.3 为强周期 */
+const CV_STRONG_MAX = 0.3;
+
+/**
+ * 由当前行「订货间隔标准差」「订货间隔平均值」两格**展示串**生成周期性标签（主标签 + 换行 + cv 备注行）。
+ * 两者均可解析为有效数且均值为正时 CV=std/mean；若 CV 小于等于 0.3 为强周期，否则弱周期。
+ * 任一格无数据或不可算 CV 时：弱周期，备注 `cv= -`。
+ */
+export function buildPeriodicityLabelFromIntervalCells(stdStr: string, meanStr: string): string {
+  const stdN = parseOrderIntervalMetricCell(stdStr);
+  const meanN = parseOrderIntervalMetricCell(meanStr);
+  if (stdN === null || meanN === null || !Number.isFinite(meanN) || meanN <= 0) {
+    return "弱周期性\ncv= -";
   }
-  if (mean <= 10) return "约旬内节奏";
-  if (mean <= 45) return "约月级节奏";
-  return "长间隔节奏";
+  const cv = stdN / meanN;
+  const cvLine = `cv=${cv.toFixed(2)}`;
+  if (cv <= CV_STRONG_MAX) {
+    return `强周期性\n${cvLine}`;
+  }
+  return `弱周期性\n${cvLine}`;
+}
+
+export function readOrderIntervalStdMeanAtPath(
+  dim: readonly CustomerInboundDimensionRow[],
+  path: OrderCountCellPath,
+): { orderIntervalStdDev: string; orderIntervalMean: string } {
+  for (const c of dim) {
+    if (c.customerName !== path.customerName) continue;
+    if (path.level === "customer") {
+      return { orderIntervalStdDev: c.orderIntervalStdDev, orderIntervalMean: c.orderIntervalMean };
+    }
+    for (const m of c.models) {
+      if (m.model !== path.model) continue;
+      if (path.level === "model") {
+        return { orderIntervalStdDev: m.orderIntervalStdDev, orderIntervalMean: m.orderIntervalMean };
+      }
+      for (const n of m.names) {
+        if (n.productName !== path.productName) continue;
+        if (path.level === "name") {
+          return { orderIntervalStdDev: n.orderIntervalStdDev, orderIntervalMean: n.orderIntervalMean };
+        }
+        for (const sp of n.specs) {
+          if (sp.spec !== path.spec) continue;
+          if (path.level === "spec") {
+            return { orderIntervalStdDev: sp.orderIntervalStdDev, orderIntervalMean: sp.orderIntervalMean };
+          }
+          for (const gr of sp.grammages) {
+            if (gr.grammage === path.grammage) {
+              return { orderIntervalStdDev: gr.orderIntervalStdDev, orderIntervalMean: gr.orderIntervalMean };
+            }
+          }
+        }
+      }
+    }
+  }
+  return { orderIntervalStdDev: "", orderIntervalMean: "" };
+}
+
+export function computePeriodicityLabelForPath(
+  dim: readonly CustomerInboundDimensionRow[],
+  path: OrderCountCellPath,
+): string {
+  const { orderIntervalStdDev, orderIntervalMean } = readOrderIntervalStdMeanAtPath(dim, path);
+  return buildPeriodicityLabelFromIntervalCells(orderIntervalStdDev, orderIntervalMean);
 }
 
 function filterRowsForCustomer(
@@ -219,11 +277,16 @@ export function listGrammageOrderIntervalStdDevStepsFromBase(
   }));
 }
 
-function parseStdDevCell(s: string): number | null {
+/** 从「订货间隔标准差/平均值」单元格展示串解析为数值；与 {@link formatIntervalDaysStat} 输出可逆对应。 */
+export function parseOrderIntervalMetricCell(s: string): number | null {
   const v = (s ?? "").trim();
   if (v === "" || v === "—" || v === "-") return null;
   const n = parseFloat(String(v).replace(/,/g, ""));
   return Number.isFinite(n) ? n : null;
+}
+
+function parseStdDevCell(s: string): number | null {
+  return parseOrderIntervalMetricCell(s);
 }
 
 /** 对若干格中可解析为数字的「订货间隔标准差」取算术平均，输出两位小数；无可算项时返回空串。 */
@@ -378,127 +441,72 @@ export function orderIntervalStdDevForNamePathWithFallback(
   return "";
 }
 
-function mapGrammagesMean(
-  rowsS: readonly SalesAnalysisBaseRow[],
-  grammages: readonly CustomerInboundGrammageRow[],
-): CustomerInboundGrammageRow[] {
-  return grammages.map((gr) => {
-    const rowsG = rowsS.filter((r) => dimGrammageKey(r) === gr.grammage);
-    return {
-      ...gr,
-      orderIntervalMean: formatIntervalDaysStat(computeOrderIntervalStatsFromRows(rowsG).meanDays),
-    };
-  });
-}
-
-function mapSpecsMean(rowsN: readonly SalesAnalysisBaseRow[], specs: readonly CustomerInboundSpecRow[]): CustomerInboundSpecRow[] {
-  return specs.map((sp) => {
-    const rowsS = rowsN.filter((r) => dimSpecKey(r) === sp.spec);
-    return {
-      ...sp,
-      orderIntervalMean: formatIntervalDaysStat(computeOrderIntervalStatsFromRows(rowsS).meanDays),
-      grammages: mapGrammagesMean(rowsS, sp.grammages),
-    };
-  });
-}
-
-function mapNamesMean(rowsM: readonly SalesAnalysisBaseRow[], names: readonly CustomerInboundNameRow[]): CustomerInboundNameRow[] {
-  return names.map((nam) => {
-    const rowsN = rowsM.filter((r) => dimNameKey(r) === nam.productName);
-    return {
-      ...nam,
-      orderIntervalMean: formatIntervalDaysStat(computeOrderIntervalStatsFromRows(rowsN).meanDays),
-      specs: mapSpecsMean(rowsN, nam.specs),
-    };
-  });
-}
-
-function mapModelsMean(rowsC: readonly SalesAnalysisBaseRow[], models: readonly CustomerInboundModelRow[]): CustomerInboundModelRow[] {
-  return models.map((mod) => {
-    const rowsM = rowsC.filter((r) => dimModelKey(r) === mod.model);
-    return {
-      ...mod,
-      orderIntervalMean: formatIntervalDaysStat(computeOrderIntervalStatsFromRows(rowsM).meanDays),
-      names: mapNamesMean(rowsM, mod.names),
-    };
-  });
+/**
+ * 自底表按路径筛行，得到该格「订货间隔的平均值」展示串；与分步/一次性写回同口径。
+ */
+export function computeOrderIntervalMeanForCellPath(
+  allRows: readonly SalesAnalysisBaseRow[],
+  path: OrderCountCellPath,
+): string {
+  const rowsC = filterRowsForCustomer(allRows, path.customerName);
+  switch (path.level) {
+    case "customer":
+      return formatIntervalDaysStat(computeOrderIntervalStatsFromRows(rowsC).meanDays);
+    case "model": {
+      const rowsM = rowsC.filter((r) => dimModelKey(r) === path.model);
+      return formatIntervalDaysStat(computeOrderIntervalStatsFromRows(rowsM).meanDays);
+    }
+    case "name": {
+      const rowsM = rowsC.filter((r) => dimModelKey(r) === path.model);
+      const rowsN = rowsM.filter((r) => dimNameKey(r) === path.productName);
+      return formatIntervalDaysStat(computeOrderIntervalStatsFromRows(rowsN).meanDays);
+    }
+    case "spec": {
+      const rowsM = rowsC.filter((r) => dimModelKey(r) === path.model);
+      const rowsN = rowsM.filter((r) => dimNameKey(r) === path.productName);
+      const rowsS = rowsN.filter((r) => dimSpecKey(r) === path.spec);
+      return formatIntervalDaysStat(computeOrderIntervalStatsFromRows(rowsS).meanDays);
+    }
+    case "grammage": {
+      const rowsM = rowsC.filter((r) => dimModelKey(r) === path.model);
+      const rowsN = rowsM.filter((r) => dimNameKey(r) === path.productName);
+      const rowsS = rowsN.filter((r) => dimSpecKey(r) === path.spec);
+      const rowsG = rowsS.filter((r) => dimGrammageKey(r) === path.grammage);
+      return formatIntervalDaysStat(computeOrderIntervalStatsFromRows(rowsG).meanDays);
+    }
+  }
 }
 
 export function applyOrderIntervalMeanToDimension(
   dim: readonly CustomerInboundDimensionRow[],
   allRows: readonly SalesAnalysisBaseRow[],
 ): CustomerInboundDimensionRow[] {
-  return dim.map((cust) => {
-    const rowsC = filterRowsForCustomer(allRows, cust.customerName);
-    return {
-      ...cust,
-      orderIntervalMean: formatIntervalDaysStat(computeOrderIntervalStatsFromRows(rowsC).meanDays),
-      models: mapModelsMean(rowsC, cust.models),
-    };
-  });
+  let acc: CustomerInboundDimensionRow[] = dim as CustomerInboundDimensionRow[];
+  for (const p of listOrderIntervalMeanCellPathsTopDown(dim)) {
+    acc = setOrderIntervalMeanOnDimension(
+      acc,
+      p,
+      computeOrderIntervalMeanForCellPath(allRows, p),
+    );
+  }
+  return acc;
 }
 
-function mapGrammagesPeriodicity(
-  rowsS: readonly SalesAnalysisBaseRow[],
-  grammages: readonly CustomerInboundGrammageRow[],
-): CustomerInboundGrammageRow[] {
-  return grammages.map((gr) => {
-    const rowsG = rowsS.filter((r) => dimGrammageKey(r) === gr.grammage);
-    const st = computeOrderIntervalStatsFromRows(rowsG);
-    return {
-      ...gr,
-      periodicityLabel: suggestPeriodicityLabel(st.meanDays, st.sampleStdDays),
-    };
-  });
-}
-
-function mapSpecsPeriodicity(rowsN: readonly SalesAnalysisBaseRow[], specs: readonly CustomerInboundSpecRow[]): CustomerInboundSpecRow[] {
-  return specs.map((sp) => {
-    const rowsS = rowsN.filter((r) => dimSpecKey(r) === sp.spec);
-    const st = computeOrderIntervalStatsFromRows(rowsS);
-    return {
-      ...sp,
-      periodicityLabel: suggestPeriodicityLabel(st.meanDays, st.sampleStdDays),
-      grammages: mapGrammagesPeriodicity(rowsS, sp.grammages),
-    };
-  });
-}
-
-function mapNamesPeriodicity(rowsM: readonly SalesAnalysisBaseRow[], names: readonly CustomerInboundNameRow[]): CustomerInboundNameRow[] {
-  return names.map((nam) => {
-    const rowsN = rowsM.filter((r) => dimNameKey(r) === nam.productName);
-    const st = computeOrderIntervalStatsFromRows(rowsN);
-    return {
-      ...nam,
-      periodicityLabel: suggestPeriodicityLabel(st.meanDays, st.sampleStdDays),
-      specs: mapSpecsPeriodicity(rowsN, nam.specs),
-    };
-  });
-}
-
-function mapModelsPeriodicity(rowsC: readonly SalesAnalysisBaseRow[], models: readonly CustomerInboundModelRow[]): CustomerInboundModelRow[] {
-  return models.map((mod) => {
-    const rowsM = rowsC.filter((r) => dimModelKey(r) === mod.model);
-    const st = computeOrderIntervalStatsFromRows(rowsM);
-    return {
-      ...mod,
-      periodicityLabel: suggestPeriodicityLabel(st.meanDays, st.sampleStdDays),
-      names: mapNamesPeriodicity(rowsM, mod.names),
-    };
-  });
-}
-
+/**
+ * 按分析树上已填的「订货间隔标准差 / 平均值」格，自下表**同一路径**衍生出的格上写 CV 型周期标签。
+ * `allRows` 参数保留以兼容旧调用，可传 `[]`；实际**只读**各节点上 `orderIntervalStdDev` / `orderIntervalMean` 展示串。
+ */
 export function applyPeriodicityToDimension(
   dim: readonly CustomerInboundDimensionRow[],
-  allRows: readonly SalesAnalysisBaseRow[],
+  _allRows?: readonly SalesAnalysisBaseRow[],
 ): CustomerInboundDimensionRow[] {
-  return dim.map((cust) => {
-    const rowsC = filterRowsForCustomer(allRows, cust.customerName);
-    const st = computeOrderIntervalStatsFromRows(rowsC);
-    return {
-      ...cust,
-      periodicityLabel: suggestPeriodicityLabel(st.meanDays, st.sampleStdDays),
-      models: mapModelsPeriodicity(rowsC, cust.models),
-    };
-  });
+  let acc: CustomerInboundDimensionRow[] = dim as CustomerInboundDimensionRow[];
+  for (const p of listOrderIntervalMeanCellPathsTopDown(dim)) {
+    acc = setPeriodicityLabelOnDimension(
+      acc,
+      p,
+      computePeriodicityLabelForPath(dim, p),
+    );
+  }
+  return acc;
 }

@@ -27,8 +27,11 @@ import {
   listNamePathsInTreeOrder,
   listSpecPathsInTreeOrder,
   orderCountByAggregatingFromChildren,
+  listOrderIntervalMeanCellPathsTopDown,
   setOrderCountOnDimension,
+  setOrderIntervalMeanOnDimension,
   setOrderIntervalStdDevOnDimension,
+  setPeriodicityLabelOnDimension,
 } from "../utils/applyOrderCountToDimension";
 import {
   buildCustomerInboundDimensionFromAnalysis,
@@ -41,9 +44,9 @@ import { formatCustomerPreviewName } from "../utils/formatCustomerPreviewName";
 import { parseCsvText } from "../utils/parseCsvText";
 import { MATERIAL_TAG_LEGEND } from "../utils/parseMaterialCode";
 import {
-  applyOrderIntervalMeanToDimension,
-  applyPeriodicityToDimension,
   averageOrderIntervalStdDevFromDirectChildren,
+  computeOrderIntervalMeanForCellPath,
+  computePeriodicityLabelForPath,
   computeOrderIntervalStdDevForGrammagePath,
   orderIntervalStdDevForNamePathWithFallback,
   orderIntervalStdDevForSpecPathWithFallback,
@@ -81,6 +84,40 @@ function formatCustomerDimMetricValue(label: string, raw: string): string {
   return v;
 }
 
+function CustomerDimPeriodicityValue({ value, alignStrip }: { value: string; alignStrip?: boolean }) {
+  const v = (value ?? "").trim();
+  if (v === "" || v === "—" || v === "-") {
+    return <span className="sales-customer-dim-metric-value">—</span>;
+  }
+  const lines = v.split("\n");
+  const main = (lines[0] ?? "").trim();
+  const sub = (lines[1] ?? "").trim();
+  if (main === "强周期性" || main === "弱周期性") {
+    const isStrong = main === "强周期性";
+    return (
+      <div
+        className={[
+          "sales-customer-dim-periodicity-wrap",
+          alignStrip ? "sales-customer-dim-periodicity-wrap--end" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        <span
+          className={[
+            "sales-customer-dim-periodicity-pill",
+            isStrong ? "sales-customer-dim-periodicity-pill--strong" : "sales-customer-dim-periodicity-pill--weak",
+          ].join(" ")}
+        >
+          {main}
+        </span>
+        {sub ? <span className="sales-customer-dim-periodicity-cvnote">{sub}</span> : null}
+      </div>
+    );
+  }
+  return <span className="sales-customer-dim-metric-value">{v}</span>;
+}
+
 function CustomerDimMetricGrid({
   lastOrderDate,
   orderCount,
@@ -90,21 +127,38 @@ function CustomerDimMetricGrid({
   compact,
   alignStrip,
 }: CustomerInboundDimensionMetrics & { compact?: boolean; alignStrip?: boolean }) {
-  const item = (label: string, value: string) => (
-    <div
-      className={[
-        compact ? "sales-customer-dim-metric sales-customer-dim-metric--compact" : "sales-customer-dim-metric",
-        alignStrip ? "sales-customer-dim-metric--strip" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-    >
-      <span className="sales-customer-dim-metric-label">{label}</span>
-      <span className="sales-customer-dim-metric-value">
-        {formatCustomerDimMetricValue(label, value)}
-      </span>
-    </div>
-  );
+  const item = (label: string, value: string) => {
+    if (label === "周期性标签") {
+      return (
+        <div
+          className={[
+            compact ? "sales-customer-dim-metric sales-customer-dim-metric--compact" : "sales-customer-dim-metric",
+            alignStrip ? "sales-customer-dim-metric--strip" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        >
+          <span className="sales-customer-dim-metric-label">{label}</span>
+          <CustomerDimPeriodicityValue value={value} alignStrip={alignStrip} />
+        </div>
+      );
+    }
+    return (
+      <div
+        className={[
+          compact ? "sales-customer-dim-metric sales-customer-dim-metric--compact" : "sales-customer-dim-metric",
+          alignStrip ? "sales-customer-dim-metric--strip" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        <span className="sales-customer-dim-metric-label">{label}</span>
+        <span className="sales-customer-dim-metric-value">
+          {formatCustomerDimMetricValue(label, value)}
+        </span>
+      </div>
+    );
+  };
   const rootClass = [
     compact ? "sales-customer-dim-metrics sales-customer-dim-metrics--compact" : "sales-customer-dim-metrics",
     alignStrip ? "sales-customer-dim-metrics--align-strip" : "",
@@ -355,6 +409,8 @@ function readInitialSalesForecastState(): {
   customerInboundDimension: CustomerInboundDimensionRow[] | null;
   orderCountComputeCompleted: boolean;
   orderIntervalStdDevComputeCompleted: boolean;
+  orderIntervalMeanComputeCompleted: boolean;
+  periodicityLabelsComputeCompleted: boolean;
 } {
   const stored = loadSalesForecastPersisted();
   if (!stored) {
@@ -365,6 +421,8 @@ function readInitialSalesForecastState(): {
       customerInboundDimension: null,
       orderCountComputeCompleted: false,
       orderIntervalStdDevComputeCompleted: false,
+      orderIntervalMeanComputeCompleted: false,
+      periodicityLabelsComputeCompleted: false,
     };
   }
   return {
@@ -374,6 +432,8 @@ function readInitialSalesForecastState(): {
     customerInboundDimension: stored.customerInboundDimension ?? null,
     orderCountComputeCompleted: stored.orderCountComputeCompleted,
     orderIntervalStdDevComputeCompleted: stored.orderIntervalStdDevComputeCompleted,
+    orderIntervalMeanComputeCompleted: stored.orderIntervalMeanComputeCompleted,
+    periodicityLabelsComputeCompleted: stored.periodicityLabelsComputeCompleted,
   };
 }
 
@@ -442,6 +502,25 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     total: number;
   } | null>(null);
   const orderIntervalStdDevInflightRef = useRef(false);
+  const [orderIntervalMeanComputeBusy, setOrderIntervalMeanComputeBusy] = useState(false);
+  const [orderIntervalMeanProgress, setOrderIntervalMeanProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+  const orderIntervalMeanInflightRef = useRef(false);
+  /** 最近一轮「计算订货间隔平均值」是否已跑完；绿底白字（与 `orderIntervalMeanComputeCompleted` 持久化一致） */
+  const [orderIntervalMeanComputeSuccess, setOrderIntervalMeanComputeSuccess] = useState(
+    () => initialPersisted.orderIntervalMeanComputeCompleted,
+  );
+  const [periodicityLabelsComputeBusy, setPeriodicityLabelsComputeBusy] = useState(false);
+  const [periodicityLabelsProgress, setPeriodicityLabelsProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+  const periodicityLabelsInflightRef = useRef(false);
+  const [periodicityLabelsComputeSuccess, setPeriodicityLabelsComputeSuccess] = useState(
+    () => initialPersisted.periodicityLabelsComputeCompleted,
+  );
   const [forecastViewTab, setForecastViewTab] = useState<"user" | "debug">(() =>
     resolveInitialForecastViewTab(initialPersisted),
   );
@@ -473,6 +552,8 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     }
     setOrderCountComputeSuccess(stored.orderCountComputeCompleted);
     setOrderIntervalStdDevComputeSuccess(stored.orderIntervalStdDevComputeCompleted);
+    setOrderIntervalMeanComputeSuccess(stored.orderIntervalMeanComputeCompleted);
+    setPeriodicityLabelsComputeSuccess(stored.periodicityLabelsComputeCompleted);
   }, [active]);
 
   useEffect(() => {
@@ -484,6 +565,8 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
       setOrderCountComputeSuccess(false);
       setOrderCountProgress(null);
       setOrderIntervalStdDevComputeSuccess(false);
+      setOrderIntervalMeanComputeSuccess(false);
+      setPeriodicityLabelsComputeSuccess(false);
     }
   }, [analysisBase]);
 
@@ -557,7 +640,14 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
         setAnalysisBase(null);
         setPreviewCollapsed(false);
         setPreview(nextPreview);
-        if (!saveSalesForecastPersisted(nextPreview, null, null, null, { orderCountComputeCompleted: false, orderIntervalStdDevComputeCompleted: false })) {
+        if (
+          !saveSalesForecastPersisted(nextPreview, null, null, null, {
+            orderCountComputeCompleted: false,
+            orderIntervalStdDevComputeCompleted: false,
+            orderIntervalMeanComputeCompleted: false,
+            periodicityLabelsComputeCompleted: false,
+          })
+        ) {
           setError("数据已显示，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复。");
         }
       } catch (err) {
@@ -592,10 +682,19 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     setOrderSegments(null);
     setOrderCountComputeSuccess(false);
     setOrderIntervalStdDevComputeSuccess(false);
+    setOrderIntervalMeanComputeSuccess(false);
+    setPeriodicityLabelsComputeSuccess(false);
     setCustomerInboundDimension(null);
     setOpenCustomerDimIds(new Set());
     setPreviewCollapsed(true);
-    if (!saveSalesForecastPersisted(preview, nextAnalysis, null, null, { orderCountComputeCompleted: false, orderIntervalStdDevComputeCompleted: false })) {
+    if (
+      !saveSalesForecastPersisted(preview, nextAnalysis, null, null, {
+        orderCountComputeCompleted: false,
+        orderIntervalStdDevComputeCompleted: false,
+        orderIntervalMeanComputeCompleted: false,
+        periodicityLabelsComputeCompleted: false,
+      })
+    ) {
       setError("底表已生成，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复底表。");
     }
   }, [preview]);
@@ -603,7 +702,14 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
   const onGenerateOrderSegments = useCallback(() => {
     if (!analysisBase?.rows.length || !preview) return;
     setError(null);
-    if (customerDimensionBusy || orderCountComputeBusy || orderIntervalStdDevComputeBusy) return;
+    if (
+      customerDimensionBusy ||
+      orderCountComputeBusy ||
+      orderIntervalStdDevComputeBusy ||
+      orderIntervalMeanComputeBusy ||
+      periodicityLabelsComputeBusy
+    )
+      return;
     setOrderSegmentsBusy(true);
     const quantities = analysisBase.rows.map((r) => r.quantity);
     const snapshotAnalysis = analysisBase;
@@ -627,12 +733,28 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
         setOrderSegmentsBusy(false);
       }
     }, 0);
-  }, [analysisBase, preview, customerInboundDimension, customerDimensionBusy, orderCountComputeBusy, orderIntervalStdDevComputeBusy]);
+  }, [
+    analysisBase,
+    preview,
+    customerInboundDimension,
+    customerDimensionBusy,
+    orderCountComputeBusy,
+    orderIntervalStdDevComputeBusy,
+    orderIntervalMeanComputeBusy,
+    periodicityLabelsComputeBusy,
+  ]);
 
   const onGenerateCustomerDimension = useCallback(() => {
     if (!analysisBase?.rows.length || !preview) return;
     setError(null);
-    if (orderSegmentsBusy || orderCountComputeBusy || orderIntervalStdDevComputeBusy) return;
+    if (
+      orderSegmentsBusy ||
+      orderCountComputeBusy ||
+      orderIntervalStdDevComputeBusy ||
+      orderIntervalMeanComputeBusy ||
+      periodicityLabelsComputeBusy
+    )
+      return;
     setCustomerDimensionBusy(true);
     const snapshotAnalysis = analysisBase;
     const snapshotPreview = preview;
@@ -644,9 +766,18 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
           setOrderCountComputeSuccess(false);
           setOrderCountProgress(null);
           setOrderIntervalStdDevComputeSuccess(false);
+          setOrderIntervalMeanComputeSuccess(false);
+          setPeriodicityLabelsComputeSuccess(false);
           setCustomerInboundDimension(next);
           setOpenCustomerDimIds(new Set(next.map((r) => r.customerName)));
-          if (!saveSalesForecastPersisted(snapshotPreview, snapshotAnalysis, snapshotOrderSegments, next, { orderCountComputeCompleted: false, orderIntervalStdDevComputeCompleted: false })) {
+          if (
+            !saveSalesForecastPersisted(snapshotPreview, snapshotAnalysis, snapshotOrderSegments, next, {
+              orderCountComputeCompleted: false,
+              orderIntervalStdDevComputeCompleted: false,
+              orderIntervalMeanComputeCompleted: false,
+              periodicityLabelsComputeCompleted: false,
+            })
+          ) {
             setError("进货周期性分析已生成，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复。");
           }
         } finally {
@@ -661,6 +792,8 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     orderSegmentsBusy,
     orderCountComputeBusy,
     orderIntervalStdDevComputeBusy,
+    orderIntervalMeanComputeBusy,
+    periodicityLabelsComputeBusy,
   ]);
 
   const toggleCustomerDimOpen = useCallback((customerName: string) => {
@@ -675,7 +808,14 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
   const onComputeOrderCounts = useCallback(() => {
     if (orderCountInflightRef.current) return;
     if (!customerInboundDimension?.length || !analysisBase?.rows.length || !preview) return;
-    if (orderSegmentsBusy || customerDimensionBusy || orderIntervalStdDevComputeBusy) return;
+    if (
+      orderSegmentsBusy ||
+      customerDimensionBusy ||
+      orderIntervalStdDevComputeBusy ||
+      orderIntervalMeanComputeBusy ||
+      periodicityLabelsComputeBusy
+    )
+      return;
     setError(null);
     const dim0 = customerInboundDimension;
     const baseRows = analysisBase.rows;
@@ -740,12 +880,21 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     orderSegmentsBusy,
     customerDimensionBusy,
     orderIntervalStdDevComputeBusy,
+    orderIntervalMeanComputeBusy,
+    periodicityLabelsComputeBusy,
   ]);
 
   const onComputeOrderIntervalStdDev = useCallback(() => {
     if (orderIntervalStdDevInflightRef.current) return;
     if (!customerInboundDimension?.length || !analysisBase?.rows.length || !preview) return;
-    if (orderSegmentsBusy || customerDimensionBusy || orderCountComputeBusy) return;
+    if (
+      orderSegmentsBusy ||
+      customerDimensionBusy ||
+      orderCountComputeBusy ||
+      orderIntervalMeanComputeBusy ||
+      periodicityLabelsComputeBusy
+    )
+      return;
     setError(null);
     const dim0 = customerInboundDimension;
     const baseRows = analysisBase.rows;
@@ -830,27 +979,128 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     orderSegmentsBusy,
     customerDimensionBusy,
     orderCountComputeBusy,
+    orderIntervalMeanComputeBusy,
+    periodicityLabelsComputeBusy,
   ]);
 
   const onComputeOrderIntervalMean = useCallback(() => {
+    if (orderIntervalMeanInflightRef.current) return;
     if (!customerInboundDimension?.length || !analysisBase?.rows.length || !preview) return;
+    if (
+      orderSegmentsBusy ||
+      customerDimensionBusy ||
+      orderCountComputeBusy ||
+      orderIntervalStdDevComputeBusy ||
+      periodicityLabelsComputeBusy
+    )
+      return;
     setError(null);
-    const next = applyOrderIntervalMeanToDimension(customerInboundDimension, analysisBase.rows);
-    setCustomerInboundDimension(next);
-    if (!saveSalesForecastPersisted(preview, analysisBase, orderSegments, next)) {
-      setError("订货间隔平均值已写入界面，但保存本地失败（可能超出浏览器配额）。");
-    }
-  }, [customerInboundDimension, analysisBase, preview, orderSegments]);
+    const dim0 = customerInboundDimension;
+    const baseRows = analysisBase.rows;
+    const meanPaths = listOrderIntervalMeanCellPathsTopDown(dim0);
+    const total = meanPaths.length;
+    if (total === 0) return;
+    orderIntervalMeanInflightRef.current = true;
+    setOrderIntervalMeanComputeSuccess(false);
+    setOrderIntervalMeanProgress({ current: 0, total });
+    setOrderIntervalMeanComputeBusy(true);
+    let acc: CustomerInboundDimensionRow[] = dim0;
+    let i = 0;
+    const step = () => {
+      if (i >= total) {
+        orderIntervalMeanInflightRef.current = false;
+        setOrderIntervalMeanProgress(null);
+        setOrderIntervalMeanComputeBusy(false);
+        if (
+          !saveSalesForecastPersisted(preview, analysisBase, orderSegments, acc, {
+            orderIntervalMeanComputeCompleted: true,
+          })
+        ) {
+          setOrderIntervalMeanComputeSuccess(false);
+          setError("订货间隔平均值已写入界面，但保存本地失败（可能超出浏览器配额）。");
+        } else {
+          setOrderIntervalMeanComputeSuccess(true);
+        }
+        return;
+      }
+      const p = meanPaths[i]!;
+      acc = setOrderIntervalMeanOnDimension(acc, p, computeOrderIntervalMeanForCellPath(baseRows, p));
+      setCustomerInboundDimension(acc);
+      i += 1;
+      setOrderIntervalMeanProgress({ current: i, total });
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }, [
+    customerInboundDimension,
+    analysisBase,
+    preview,
+    orderSegments,
+    orderSegmentsBusy,
+    customerDimensionBusy,
+    orderCountComputeBusy,
+    orderIntervalStdDevComputeBusy,
+    periodicityLabelsComputeBusy,
+  ]);
 
   const onGeneratePeriodicityLabels = useCallback(() => {
+    if (periodicityLabelsInflightRef.current) return;
     if (!customerInboundDimension?.length || !analysisBase?.rows.length || !preview) return;
+    if (
+      orderSegmentsBusy ||
+      customerDimensionBusy ||
+      orderCountComputeBusy ||
+      orderIntervalStdDevComputeBusy ||
+      orderIntervalMeanComputeBusy
+    )
+      return;
     setError(null);
-    const next = applyPeriodicityToDimension(customerInboundDimension, analysisBase.rows);
-    setCustomerInboundDimension(next);
-    if (!saveSalesForecastPersisted(preview, analysisBase, orderSegments, next)) {
-      setError("周期性标签已写入界面，但保存本地失败（可能超出浏览器配额）。");
-    }
-  }, [customerInboundDimension, analysisBase, preview, orderSegments]);
+    const dim0 = customerInboundDimension;
+    const labelPaths = listOrderIntervalMeanCellPathsTopDown(dim0);
+    const total = labelPaths.length;
+    if (total === 0) return;
+    periodicityLabelsInflightRef.current = true;
+    setPeriodicityLabelsComputeSuccess(false);
+    setPeriodicityLabelsProgress({ current: 0, total });
+    setPeriodicityLabelsComputeBusy(true);
+    let acc: CustomerInboundDimensionRow[] = dim0;
+    let i = 0;
+    const step = () => {
+      if (i >= total) {
+        periodicityLabelsInflightRef.current = false;
+        setPeriodicityLabelsProgress(null);
+        setPeriodicityLabelsComputeBusy(false);
+        if (
+          !saveSalesForecastPersisted(preview, analysisBase, orderSegments, acc, {
+            periodicityLabelsComputeCompleted: true,
+          })
+        ) {
+          setPeriodicityLabelsComputeSuccess(false);
+          setError("周期性标签已写入界面，但保存本地失败（可能超出浏览器配额）。");
+        } else {
+          setPeriodicityLabelsComputeSuccess(true);
+        }
+        return;
+      }
+      const p = labelPaths[i]!;
+      acc = setPeriodicityLabelOnDimension(acc, p, computePeriodicityLabelForPath(dim0, p));
+      setCustomerInboundDimension(acc);
+      i += 1;
+      setPeriodicityLabelsProgress({ current: i, total });
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }, [
+    customerInboundDimension,
+    analysisBase,
+    preview,
+    orderSegments,
+    orderSegmentsBusy,
+    customerDimensionBusy,
+    orderCountComputeBusy,
+    orderIntervalStdDevComputeBusy,
+    orderIntervalMeanComputeBusy,
+  ]);
 
   const analysisTableHeaders = useMemo(() => {
     if (orderSegments) {
@@ -1018,7 +1268,9 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                   orderSegmentsBusy ||
                   customerDimensionBusy ||
                   orderCountComputeBusy ||
-                  orderIntervalStdDevComputeBusy
+                  orderIntervalStdDevComputeBusy ||
+                  orderIntervalMeanComputeBusy ||
+                  periodicityLabelsComputeBusy
                 }
                 aria-busy={orderSegmentsBusy}
                 onClick={onGenerateOrderSegments}
@@ -1037,7 +1289,9 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                   orderSegmentsBusy ||
                   customerDimensionBusy ||
                   orderCountComputeBusy ||
-                  orderIntervalStdDevComputeBusy
+                  orderIntervalStdDevComputeBusy ||
+                  orderIntervalMeanComputeBusy ||
+                  periodicityLabelsComputeBusy
                 }
                 aria-busy={customerDimensionBusy}
                 onClick={onGenerateCustomerDimension}
@@ -1211,6 +1465,9 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                   .join(" ")}
                 disabled={
                   orderCountComputeBusy ||
+                  orderIntervalStdDevComputeBusy ||
+                  orderIntervalMeanComputeBusy ||
+                  periodicityLabelsComputeBusy ||
                   orderSegmentsBusy ||
                   customerDimensionBusy ||
                   !analysisBase?.rows.length
@@ -1260,6 +1517,8 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                 disabled={
                   orderCountComputeBusy ||
                   orderIntervalStdDevComputeBusy ||
+                  orderIntervalMeanComputeBusy ||
+                  periodicityLabelsComputeBusy ||
                   orderSegmentsBusy ||
                   customerDimensionBusy ||
                   !analysisBase?.rows.length
@@ -1299,29 +1558,113 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
               </button>
               <button
                 type="button"
-                className="ghost-btn tiny-btn"
+                className={[
+                  "ghost-btn",
+                  "tiny-btn",
+                  "sales-order-count-compute-btn",
+                  orderIntervalMeanComputeBusy ? "sales-order-count-compute-btn--running" : "",
+                  !orderIntervalMeanComputeBusy && orderIntervalMeanComputeSuccess
+                    ? "sales-order-count-compute-btn--done"
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 disabled={
                   orderCountComputeBusy ||
                   orderIntervalStdDevComputeBusy ||
+                  orderIntervalMeanComputeBusy ||
+                  periodicityLabelsComputeBusy ||
                   orderSegmentsBusy ||
-                  customerDimensionBusy
+                  customerDimensionBusy ||
+                  !analysisBase?.rows.length
+                }
+                aria-busy={orderIntervalMeanComputeBusy}
+                aria-label={
+                  orderIntervalMeanComputeBusy && orderIntervalMeanProgress
+                    ? `计算订货间隔平均值进度 ${orderIntervalMeanProgress.current} / ${orderIntervalMeanProgress.total}`
+                    : "计算订货间隔平均值"
                 }
                 onClick={onComputeOrderIntervalMean}
               >
-                计算订货间隔平均值
+                <span className="sales-order-count-compute-btn-inner">
+                  {orderIntervalMeanComputeBusy && (
+                    <span className="sales-order-count-compute-btn-spinner" aria-hidden />
+                  )}
+                  <span className="sales-order-count-compute-btn-label">
+                    {orderIntervalMeanComputeBusy
+                      ? orderIntervalMeanProgress
+                        ? `计算中 ${orderIntervalMeanProgress.current}/${orderIntervalMeanProgress.total}`
+                        : "计算中…"
+                      : "计算订货间隔平均值"}
+                  </span>
+                </span>
+                {orderIntervalMeanComputeBusy &&
+                  orderIntervalMeanProgress &&
+                  orderIntervalMeanProgress.total > 0 && (
+                    <span className="sales-order-count-compute-btn-track" aria-hidden>
+                      <span
+                        className="sales-order-count-compute-btn-fill"
+                        style={{
+                          width: `${(orderIntervalMeanProgress.current / orderIntervalMeanProgress.total) * 100}%`,
+                        }}
+                      />
+                    </span>
+                  )}
               </button>
               <button
                 type="button"
-                className="ghost-btn tiny-btn"
+                className={[
+                  "ghost-btn",
+                  "tiny-btn",
+                  "sales-order-count-compute-btn",
+                  periodicityLabelsComputeBusy ? "sales-order-count-compute-btn--running" : "",
+                  !periodicityLabelsComputeBusy && periodicityLabelsComputeSuccess
+                    ? "sales-order-count-compute-btn--done"
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 disabled={
                   orderCountComputeBusy ||
                   orderIntervalStdDevComputeBusy ||
+                  orderIntervalMeanComputeBusy ||
+                  periodicityLabelsComputeBusy ||
                   orderSegmentsBusy ||
-                  customerDimensionBusy
+                  customerDimensionBusy ||
+                  !analysisBase?.rows.length
+                }
+                aria-busy={periodicityLabelsComputeBusy}
+                aria-label={
+                  periodicityLabelsComputeBusy && periodicityLabelsProgress
+                    ? `生成周期性标签进度 ${periodicityLabelsProgress.current} / ${periodicityLabelsProgress.total}`
+                    : "生成周期性标签"
                 }
                 onClick={onGeneratePeriodicityLabels}
               >
-                生成周期性标签
+                <span className="sales-order-count-compute-btn-inner">
+                  {periodicityLabelsComputeBusy && (
+                    <span className="sales-order-count-compute-btn-spinner" aria-hidden />
+                  )}
+                  <span className="sales-order-count-compute-btn-label">
+                    {periodicityLabelsComputeBusy
+                      ? periodicityLabelsProgress
+                        ? `计算中 ${periodicityLabelsProgress.current}/${periodicityLabelsProgress.total}`
+                        : "计算中…"
+                      : "生成周期性标签"}
+                  </span>
+                </span>
+                {periodicityLabelsComputeBusy &&
+                  periodicityLabelsProgress &&
+                  periodicityLabelsProgress.total > 0 && (
+                    <span className="sales-order-count-compute-btn-track" aria-hidden>
+                      <span
+                        className="sales-order-count-compute-btn-fill"
+                        style={{
+                          width: `${(periodicityLabelsProgress.current / periodicityLabelsProgress.total) * 100}%`,
+                        }}
+                      />
+                    </span>
+                  )}
               </button>
             </div>
           </div>

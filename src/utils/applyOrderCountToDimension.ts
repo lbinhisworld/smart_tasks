@@ -347,3 +347,183 @@ export function setOrderIntervalStdDevOnDimension(
   });
 }
 
+/**
+ * 仅将某一节点「订货间隔的平均值」字段设为给定值，其余不动。路径同 {@link setOrderCountOnDimension}。
+ */
+export function setOrderIntervalMeanOnDimension(
+  dim: readonly CustomerInboundDimensionRow[],
+  path: OrderCountCellPath,
+  orderIntervalMean: string,
+): CustomerInboundDimensionRow[] {
+  if (path.level === "customer") {
+    return dim.map((c) =>
+      c.customerName === path.customerName ? { ...c, orderIntervalMean } : c,
+    );
+  }
+  if (path.level === "model") {
+    return dim.map((c) => {
+      if (c.customerName !== path.customerName) return c;
+      return {
+        ...c,
+        models: c.models.map((m) => (m.model === path.model ? { ...m, orderIntervalMean } : m)),
+      };
+    });
+  }
+  return dim.map((c) => {
+    if (c.customerName !== path.customerName) return c;
+    return {
+      ...c,
+      models: c.models.map((m) => {
+        if (m.model !== path.model) return m;
+        if (path.level === "name") {
+          return {
+            ...m,
+            names: m.names.map((n) =>
+              n.productName === path.productName ? { ...n, orderIntervalMean } : n,
+            ),
+          };
+        }
+        return {
+          ...m,
+          names: m.names.map((n) => {
+            if (n.productName !== path.productName) return n;
+            if (path.level === "spec") {
+              return {
+                ...n,
+                specs: n.specs.map((s) => (s.spec === path.spec ? { ...s, orderIntervalMean } : s)),
+              };
+            }
+            if (path.level === "grammage") {
+              return {
+                ...n,
+                specs: n.specs.map((s) => {
+                  if (s.spec !== path.spec) return s;
+                  return {
+                    ...s,
+                    grammages: s.grammages.map((g) =>
+                      g.grammage === path.grammage ? { ...g, orderIntervalMean } : g,
+                    ),
+                  };
+                }),
+              };
+            }
+            return n;
+          }),
+        };
+      }),
+    };
+  });
+}
+
+/**
+ * 「计算订货间隔平均值」用：自**顶**（客户）向**下**（克重）的前序路径序列，与界面折叠树一致。
+ * 与「计算订货间隔标准差」的克重→…→客户顺序（自下而上写回）不同。
+ */
+export function listOrderIntervalMeanCellPathsTopDown(
+  dim: readonly CustomerInboundDimensionRow[],
+): OrderCountCellPath[] {
+  const out: OrderCountCellPath[] = [];
+  for (const cust of dim) {
+    out.push({ level: "customer", customerName: cust.customerName });
+    for (const mod of cust.models) {
+      out.push({ level: "model", customerName: cust.customerName, model: mod.model });
+      for (const nam of mod.names) {
+        out.push({
+          level: "name",
+          customerName: cust.customerName,
+          model: mod.model,
+          productName: nam.productName,
+        });
+        for (const sp of nam.specs) {
+          out.push({
+            level: "spec",
+            customerName: cust.customerName,
+            model: mod.model,
+            productName: nam.productName,
+            spec: sp.spec,
+          });
+          for (const gr of sp.grammages) {
+            out.push({
+              level: "grammage",
+              customerName: cust.customerName,
+              model: mod.model,
+              productName: nam.productName,
+              spec: sp.spec,
+              grammage: gr.grammage,
+            });
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * 仅将某一节点「周期性标签」字段设为给定值，其余不动。路径同 {@link setOrderCountOnDimension}。
+ */
+export function setPeriodicityLabelOnDimension(
+  dim: readonly CustomerInboundDimensionRow[],
+  path: OrderCountCellPath,
+  periodicityLabel: string,
+): CustomerInboundDimensionRow[] {
+  if (path.level === "customer") {
+    return dim.map((c) =>
+      c.customerName === path.customerName ? { ...c, periodicityLabel } : c,
+    );
+  }
+  if (path.level === "model") {
+    return dim.map((c) => {
+      if (c.customerName !== path.customerName) return c;
+      return {
+        ...c,
+        models: c.models.map((m) => (m.model === path.model ? { ...m, periodicityLabel } : m)),
+      };
+    });
+  }
+  return dim.map((c) => {
+    if (c.customerName !== path.customerName) return c;
+    return {
+      ...c,
+      models: c.models.map((m) => {
+        if (m.model !== path.model) return m;
+        if (path.level === "name") {
+          return {
+            ...m,
+            names: m.names.map((n) =>
+              n.productName === path.productName ? { ...n, periodicityLabel } : n,
+            ),
+          };
+        }
+        return {
+          ...m,
+          names: m.names.map((n) => {
+            if (n.productName !== path.productName) return n;
+            if (path.level === "spec") {
+              return {
+                ...n,
+                specs: n.specs.map((s) => (s.spec === path.spec ? { ...s, periodicityLabel } : s)),
+              };
+            }
+            if (path.level === "grammage") {
+              return {
+                ...n,
+                specs: n.specs.map((s) => {
+                  if (s.spec !== path.spec) return s;
+                  return {
+                    ...s,
+                    grammages: s.grammages.map((g) =>
+                      g.grammage === path.grammage ? { ...g, periodicityLabel } : g,
+                    ),
+                  };
+                }),
+              };
+            }
+            return n;
+          }),
+        };
+      }),
+    };
+  });
+}
+

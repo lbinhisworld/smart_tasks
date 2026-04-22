@@ -49,6 +49,10 @@ type PersistedV1 = {
   orderCountComputeCompleted: boolean;
   /** 用户已跑过「计算订货间隔标准差」分步汇总并成功保存；用于刷新后恢复绿底白字按钮态 */
   orderIntervalStdDevComputeCompleted: boolean;
+  /** 用户已跑过「计算订货间隔平均值」分步汇总并成功保存；用于刷新后恢复绿底白字按钮态 */
+  orderIntervalMeanComputeCompleted: boolean;
+  /** 用户已跑过「生成周期性标签」分步汇总并成功保存；用于刷新后恢复绿底白字按钮态 */
+  periodicityLabelsComputeCompleted: boolean;
 };
 
 export type SaveSalesForecastPersistedOptions = {
@@ -56,6 +60,10 @@ export type SaveSalesForecastPersistedOptions = {
   orderCountComputeCompleted?: boolean;
   /** 为 true 表示本轮保存后应视为已跑完「计算订货间隔标准差」；为 false 表示重置。不传则与本地已有值一致。 */
   orderIntervalStdDevComputeCompleted?: boolean;
+  /** 为 true 表示本轮保存后应视为已跑完「计算订货间隔平均值」；为 false 表示重置。不传则与本地已有值一致。 */
+  orderIntervalMeanComputeCompleted?: boolean;
+  /** 为 true 表示本轮保存后应视为已跑完「生成周期性标签」；为 false 表示重置。不传则与本地已有值一致。 */
+  periodicityLabelsComputeCompleted?: boolean;
 };
 
 const TAG_KINDS: MaterialTagKind[] = ["id", "model", "name", "spec", "grammage", "source"];
@@ -258,6 +266,8 @@ function parsePersisted(raw: unknown): PersistedV1 | null {
     customerInboundDimension,
     orderCountComputeCompleted: o.orderCountComputeCompleted === true,
     orderIntervalStdDevComputeCompleted: o.orderIntervalStdDevComputeCompleted === true,
+    orderIntervalMeanComputeCompleted: o.orderIntervalMeanComputeCompleted === true,
+    periodicityLabelsComputeCompleted: o.periodicityLabelsComputeCompleted === true,
   };
 }
 
@@ -288,6 +298,14 @@ export function saveSalesForecastPersisted(
     options?.orderIntervalStdDevComputeCompleted !== undefined
       ? options.orderIntervalStdDevComputeCompleted
       : (prev?.orderIntervalStdDevComputeCompleted ?? false);
+  const orderIntervalMeanComputeCompleted =
+    options?.orderIntervalMeanComputeCompleted !== undefined
+      ? options.orderIntervalMeanComputeCompleted
+      : (prev?.orderIntervalMeanComputeCompleted ?? false);
+  const periodicityLabelsComputeCompleted =
+    options?.periodicityLabelsComputeCompleted !== undefined
+      ? options.periodicityLabelsComputeCompleted
+      : (prev?.periodicityLabelsComputeCompleted ?? false);
   const payload: PersistedV1 = {
     v: 1,
     preview,
@@ -296,6 +314,8 @@ export function saveSalesForecastPersisted(
     customerInboundDimension,
     orderCountComputeCompleted,
     orderIntervalStdDevComputeCompleted,
+    orderIntervalMeanComputeCompleted,
+    periodicityLabelsComputeCompleted,
   };
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));

@@ -3736,6 +3736,56 @@ button.app-config-md-download.linkish {
   word-break: break-word;
 }
 
+.sales-customer-dim-periodicity-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sales-customer-dim-periodicity-wrap--end {
+  align-items: flex-end;
+}
+
+.sales-customer-dim-metric--strip .sales-customer-dim-periodicity-wrap--end,
+.sales-customer-dim-metrics--align-strip .sales-customer-dim-periodicity-wrap--end {
+  width: 100%;
+}
+
+.sales-customer-dim-periodicity-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.sales-customer-dim-periodicity-pill--strong {
+  background: #0d7a3e;
+  color: #fff;
+}
+
+.sales-customer-dim-periodicity-pill--weak {
+  background: #d8dde6;
+  color: #1a1d24;
+}
+
+.sales-customer-dim-periodicity-cvnote {
+  font-size: 0.72rem;
+  color: #5c6578;
+  line-height: 1.2;
+  word-break: break-all;
+}
+
+.sales-customer-dim-metric--strip .sales-customer-dim-periodicity-cvnote,
+.sales-customer-dim-metrics--align-strip .sales-customer-dim-periodicity-cvnote {
+  text-align: right;
+  width: 100%;
+}
+
 .sales-customer-dim-metric--compact .sales-customer-dim-metric-label {
   font-size: 0.74rem;
 }
@@ -3853,6 +3903,22 @@ button.app-config-md-download.linkish {
 
 .sales-order-count-compute-btn--done .sales-order-count-compute-btn-label {
   color: #fff;
+}
+
+/* ghost-btn 带白底，需与 --done 合并提高优先级，保证「计算完成」态绿底白字 */
+.ghost-btn.tiny-btn.sales-order-count-compute-btn.sales-order-count-compute-btn--done {
+  background: #16a34a;
+  color: #fff;
+  border-color: #15803d;
+}
+.ghost-btn.tiny-btn.sales-order-count-compute-btn.sales-order-count-compute-btn--done:hover:not(:disabled) {
+  background: #22c55e;
+  color: #fff;
+  border-color: #16a34a;
+}
+.ghost-btn.tiny-btn.sales-order-count-compute-btn.sales-order-count-compute-btn--done:disabled {
+  opacity: 1;
+  cursor: not-allowed;
 }
 
 .sales-order-count-compute-btn:disabled.sales-order-count-compute-btn--running {
