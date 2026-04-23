@@ -41,6 +41,10 @@ import {
 } from "../utils/buildCustomerInboundDimensionFromAnalysis";
 import { decodeTextBytesAuto } from "../utils/decodeTextBytesAuto";
 import {
+  filterCustomerModelsForHideIrregular,
+  isIrregularPatternPeriodicity,
+} from "../utils/filterCustomerInboundTreeHideIrregular";
+import {
   listInboundPeriodicityPatterns,
   type InboundPeriodicityPatternItem,
 } from "../utils/inboundPeriodicityPatternMining";
@@ -273,9 +277,12 @@ function CustomerDimMetricGrid({
 function CustomerDimensionModelTree({
   customerName,
   models,
+  listEmptyByFilter,
 }: {
   customerName: string;
   models: CustomerInboundModelRow[];
+  /** 原数据有子级，但在「隐藏不规则模式」下全部被筛空 */
+  listEmptyByFilter?: boolean;
 }) {
   /** 记入 Set 的节点为收起；默认空集表示各级展开 */
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -296,7 +303,13 @@ function CustomerDimensionModelTree({
   const isOpen = (key: string) => !collapsed.has(key);
 
   if (models.length === 0) {
-    return <p className="muted small sales-customer-dim-sku-empty">该客户暂无型号下钻数据。</p>;
+    return (
+      <p className="muted small sales-customer-dim-sku-empty">
+        {listEmptyByFilter
+          ? "在「隐藏不规则模式」下，该客户下暂无可见的型号/品名/规格/克重（子级可能均为「不规则」）。"
+          : "该客户暂无型号下钻数据。"}
+      </p>
+    );
   }
 
   return (
@@ -617,6 +630,11 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
   );
   const [inboundPatternStrongSectionOpen, setInboundPatternStrongSectionOpen] = useState(true);
   const [inboundPatternWeakSectionOpen, setInboundPatternWeakSectionOpen] = useState(true);
+  const [customerInboundCardCollapsed, setCustomerInboundCardCollapsed] = useState(false);
+  /** 与「已生成周期标签」同步：有完成态时默认可为 true，生成成功后强制 true */
+  const [hideIrregularPatterns, setHideIrregularPatterns] = useState(
+    () => readInitialSalesForecastState().periodicityLabelsComputeCompleted,
+  );
   const [forecastViewTab, setForecastViewTab] = useState<"user" | "debug">(() =>
     resolveInitialForecastViewTab(initialPersisted),
   );
@@ -663,6 +681,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
       setOrderIntervalStdDevComputeSuccess(false);
       setOrderIntervalMeanComputeSuccess(false);
       setPeriodicityLabelsComputeSuccess(false);
+      setHideIrregularPatterns(false);
     }
   }, [analysisBase]);
 
@@ -780,6 +799,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     setOrderIntervalStdDevComputeSuccess(false);
     setOrderIntervalMeanComputeSuccess(false);
     setPeriodicityLabelsComputeSuccess(false);
+    setHideIrregularPatterns(false);
     setCustomerInboundDimension(null);
     setOpenCustomerDimIds(new Set());
     setPreviewCollapsed(true);
@@ -864,6 +884,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
           setOrderIntervalStdDevComputeSuccess(false);
           setOrderIntervalMeanComputeSuccess(false);
           setPeriodicityLabelsComputeSuccess(false);
+          setHideIrregularPatterns(false);
           setCustomerInboundDimension(next);
           setOpenCustomerDimIds(new Set(next.map((r) => r.customerName)));
           if (
@@ -1175,6 +1196,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
           setError("周期性标签已写入界面，但保存本地失败（可能超出浏览器配额）。");
         } else {
           setPeriodicityLabelsComputeSuccess(true);
+          setHideIrregularPatterns(true);
         }
         return;
       }
@@ -1207,23 +1229,29 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     return [...SALES_ANALYSIS_BASE_HEADERS];
   }, [orderSegments]);
 
-  const { inboundPatternsStrong, inboundPatternsWeak } = useMemo(() => {
+  const { inboundPatternsStrong, inboundPatternsWeak, customerNamesWithPeriodicHighlight } = useMemo(() => {
     if (
       !periodicityLabelsComputeSuccess ||
       !customerInboundDimension?.length ||
       !analysisBase?.rows.length
     ) {
-      return { inboundPatternsStrong: [] as InboundPeriodicityPatternItem[], inboundPatternsWeak: [] };
+      return {
+        inboundPatternsStrong: [] as InboundPeriodicityPatternItem[],
+        inboundPatternsWeak: [] as InboundPeriodicityPatternItem[],
+        customerNamesWithPeriodicHighlight: new Set<string>(),
+      };
     }
     const all = listInboundPeriodicityPatterns(customerInboundDimension, analysisBase.rows);
     const strong: InboundPeriodicityPatternItem[] = [];
     const weak: InboundPeriodicityPatternItem[] = [];
+    const customerNamesWithPeriodicHighlight = new Set<string>();
     for (const p of all) {
+      customerNamesWithPeriodicHighlight.add(p.customerName);
       const first = p.periodicityLabel.trim().split("\n")[0]?.trim();
       if (first === "强周期性") strong.push(p);
       else if (first === "弱周期性") weak.push(p);
     }
-    return { inboundPatternsStrong: strong, inboundPatternsWeak: weak };
+    return { inboundPatternsStrong: strong, inboundPatternsWeak: weak, customerNamesWithPeriodicHighlight };
   }, [analysisBase, customerInboundDimension, periodicityLabelsComputeSuccess]);
 
   return (
@@ -1564,7 +1592,28 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
         <>
         <section className="card sales-customer-inbound-dimension-card">
           <div className="card-head tight sales-customer-inbound-dim-head">
-            <h3 className="sales-customer-inbound-dim-title">客户进货周期性分析</h3>
+            <div className="sales-customer-inbound-dim-head-left">
+              <h3 className="sales-customer-inbound-dim-title">客户进货周期性分析</h3>
+              <button
+                type="button"
+                className="ghost-btn tiny-btn sales-customer-inbound-fold-btn"
+                onClick={() => setCustomerInboundCardCollapsed((c) => !c)}
+                aria-expanded={!customerInboundCardCollapsed}
+              >
+                {customerInboundCardCollapsed ? "展开分析" : "折叠分析"}
+              </button>
+              {periodicityLabelsComputeSuccess && (
+                <label className="sales-customer-dim-hide-irregular-label">
+                  <input
+                    type="checkbox"
+                    className="sales-customer-dim-hide-irregular-input"
+                    checked={hideIrregularPatterns}
+                    onChange={(e) => setHideIrregularPatterns(e.target.checked)}
+                  />
+                  <span>隐藏不规则模式</span>
+                </label>
+              )}
+            </div>
             <div className="sales-customer-inbound-dim-actions">
               <button
                 type="button"
@@ -1784,6 +1833,12 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
               </button>
             </div>
           </div>
+          {customerInboundCardCollapsed ? (
+            <p className="muted small sales-customer-inbound-collapsed-hint" role="status">
+              已折叠：共 {customerInboundDimension.length} 个客户（按名称去重）。点击「展开分析」查看说明与层级树；上方各计算/生成按钮仍可用。
+            </p>
+          ) : (
+            <>
           <p className="muted small sales-data-preview-meta">
             共 {customerInboundDimension.length} 个客户（按客户名称去重）。本分析结果与底表一并写入本机浏览器
             <strong>localStorage</strong>，刷新或切换应用内页面后仍保留。点击「启动进货周期性分析」后会<strong>默认展开</strong>
@@ -1793,6 +1848,18 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
           <div className="sales-customer-dim-tree" role="tree" aria-label="客户进货周期性分析层级树">
             {customerInboundDimension.map((row) => {
               const expanded = openCustomerDimIds.has(row.customerName);
+              const applyHideIrreg =
+                periodicityLabelsComputeSuccess && hideIrregularPatterns;
+              const visibleModels = filterCustomerModelsForHideIrregular(
+                row.models,
+                applyHideIrreg,
+              );
+              const listEmptyByFilter =
+                applyHideIrreg && row.models.length > 0 && visibleModels.length === 0;
+              const hideTotalMetrics =
+                applyHideIrreg && isIrregularPatternPeriodicity(row.periodicityLabel);
+              /** 与「进货周期性模式挖掘」同源：该客户在树中任一路径（含总体）被纳入强/弱挖掘结果 */
+              const showPeriodicDiscoveryHighlight = customerNamesWithPeriodicHighlight.has(row.customerName);
               return (
                 <div
                   key={row.customerName}
@@ -1801,7 +1868,14 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                   aria-expanded={expanded}
                 >
                   <div className="sales-customer-dim-block-shell">
-                    <div className="sales-customer-dim-level-card sales-customer-dim-level-card--total">
+                    <div
+                      className={[
+                        "sales-customer-dim-level-card sales-customer-dim-level-card--total",
+                        showPeriodicDiscoveryHighlight ? "sales-customer-dim-level-card--descendant-periodic" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                    >
                       <div className="sales-customer-dim-level-line">
                         <div className="sales-customer-dim-level-tree">
                           <button
@@ -1818,29 +1892,52 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                               <CustomerDimLabelIcon kind="customer" />
                               <span className="sales-customer-dim-block-dim-label">客户</span>
                               <span className="sales-customer-dim-block-name-value">{row.customerName}</span>
+                              {showPeriodicDiscoveryHighlight ? (
+                                <span
+                                  className="sales-customer-dim-discovered-periodic-pill"
+                                  aria-label="该客户在分析树中存在强周期性或弱周期性（与进货周期性模式挖掘一致）"
+                                >
+                                  发现周期性
+                                </span>
+                              ) : null}
                             </span>
                           </button>
                         </div>
                         <div className="sales-customer-dim-level-metric-wrap">
-                          <CustomerDimMetricGrid
-                            lastOrderDate={row.lastOrderDate}
-                            orderCount={row.orderCount}
-                            orderIntervalStdDev={row.orderIntervalStdDev}
-                            orderIntervalMean={row.orderIntervalMean}
-                            periodicityLabel={row.periodicityLabel}
-                            alignStrip
-                          />
+                          {!hideTotalMetrics ? (
+                            <CustomerDimMetricGrid
+                              lastOrderDate={row.lastOrderDate}
+                              orderCount={row.orderCount}
+                              orderIntervalStdDev={row.orderIntervalStdDev}
+                              orderIntervalMean={row.orderIntervalMean}
+                              periodicityLabel={row.periodicityLabel}
+                              alignStrip
+                            />
+                          ) : (
+                            <div
+                              className="sales-customer-dim-irregular-hidden-metric"
+                              role="note"
+                            >
+                              <span className="muted small">总体为不规则，已按开关隐藏</span>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
                   </div>
                   {expanded && (
-                    <CustomerDimensionModelTree customerName={row.customerName} models={row.models} />
+                    <CustomerDimensionModelTree
+                      customerName={row.customerName}
+                      models={visibleModels}
+                      listEmptyByFilter={listEmptyByFilter}
+                    />
                   )}
                 </div>
               );
             })}
           </div>
+            </>
+          )}
         </section>
         <section
           className="card sales-inbound-periodicity-pattern-card"
