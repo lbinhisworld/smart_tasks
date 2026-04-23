@@ -20,6 +20,12 @@ export type InboundProductMaterialTag = {
   text: string;
 };
 
+/** 与当前模式子卡片路径一致的底表行，按时间排序后的采购时间线节点 */
+export type InboundPurchaseTimelineNode = {
+  date: string;
+  quantity: string;
+};
+
 export type InboundPeriodicityPatternItem = {
   key: string;
   customerName: string;
@@ -35,6 +41,8 @@ export type InboundPeriodicityPatternItem = {
   periodicityLabel: string;
   nextOrderDate: string;
   avgOrderQty: string;
+  /** 当前客户 + 参数路径下底表行展开的采购时间线（按日期升序） */
+  purchaseTimeline: readonly InboundPurchaseTimelineNode[];
 };
 
 function normalizeCustomerKey(raw: string): string {
@@ -118,6 +126,41 @@ function parseYmdToLocalMs(ymd: string): number | null {
   return d.getTime();
 }
 
+/** 与维树/间隔统计一致：底表「单据日期」展示串 → 可排序时间戳 */
+function parseAnalysisRowDateMs(s: string): number | null {
+  const t = (s ?? "").trim();
+  if (!t) return null;
+  const slash = t.replace(/\//g, "-");
+  let n = Date.parse(slash);
+  if (!Number.isNaN(n)) return n;
+  const m = t.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
+  if (m) {
+    n = Date.parse(`${m[1]}-${m[2]!.padStart(2, "0")}-${m[3]!.padStart(2, "0")}`);
+    if (!Number.isNaN(n)) return n;
+  }
+  return null;
+}
+
+function buildPurchaseTimelineFromBaseRows(
+  rows: readonly SalesAnalysisBaseRow[],
+): InboundPurchaseTimelineNode[] {
+  const decorated = rows.map((r, index) => ({
+    r,
+    ms: parseAnalysisRowDateMs(r.date),
+    index,
+  }));
+  decorated.sort((a, b) => {
+    if (a.ms !== null && b.ms !== null && a.ms !== b.ms) return a.ms - b.ms;
+    if (a.ms !== null && b.ms === null) return -1;
+    if (a.ms === null && b.ms !== null) return 1;
+    return a.index - b.index;
+  });
+  return decorated.map(({ r }) => ({
+    date: (r.date ?? "").trim() || "—",
+    quantity: (r.quantity ?? "").trim() || "—",
+  }));
+}
+
 function formatYmdLocal(ms: number): string {
   const d = new Date(ms);
   const y = d.getFullYear();
@@ -189,6 +232,7 @@ function pushItem(
     periodicityLabel: (args.periodicityLabel ?? "").trim() || "—",
     nextOrderDate: estimateNextOrderDate(args.lastOrderDate, args.orderIntervalMean),
     avgOrderQty: averageQuantity(args.rows),
+    purchaseTimeline: buildPurchaseTimelineFromBaseRows(args.rows),
   });
 }
 

@@ -3773,13 +3773,318 @@ button.app-config-md-download.linkish {
 
 .sales-inbound-pattern-subhead {
   flex-shrink: 0;
+  /* 用 Grid 固定右侧「时钟 + CV」列宽，避免 flex 下标题把按钮挤出可视区（父级 subcard 为 overflow:hidden 时会被裁掉） */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 8px;
+  padding: 8px 12px 9px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.12);
+}
+
+.sales-inbound-pattern-subhead-right {
+  display: inline-flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: min-content;
+}
+
+.sales-inbound-pattern-timeline-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 4px;
+  min-width: 2rem;
+  min-height: 2rem;
+  box-sizing: border-box;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.55);
+  color: #0f172a;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.sales-inbound-pattern-timeline-trigger svg {
+  flex-shrink: 0;
+  display: block;
+}
+
+.sales-inbound-pattern-timeline-trigger:hover {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(15, 23, 42, 0.22);
+  color: #1d4ed8;
+}
+
+.sales-inbound-pattern-timeline-trigger[aria-expanded="true"] {
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.35);
+  color: #1d4ed8;
+}
+
+/* 采购时间线：整页右侧滑出抽屉 + 磨砂半透明 */
+.sales-inbound-pattern-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  pointer-events: none;
+}
+
+.sales-inbound-pattern-drawer-root--open {
+  pointer-events: auto;
+}
+
+.sales-inbound-pattern-drawer-scrim {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  display: block;
+  cursor: default;
+  background: rgba(15, 23, 42, 0.32);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  opacity: 0;
+  transition: opacity 0.28s ease;
+  pointer-events: none;
+}
+
+.sales-inbound-pattern-drawer-root--open .sales-inbound-pattern-drawer-scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sales-inbound-pattern-drawer-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(26.5rem, 100vw);
+  max-width: 100%;
+  box-sizing: border-box;
+  transform: translateX(100%);
+  transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+  background: rgba(248, 250, 252, 0.55);
+  backdrop-filter: blur(20px) saturate(1.25);
+  -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  border-left: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow:
+    -16px 0 48px rgba(15, 23, 42, 0.12),
+    -4px 0 16px rgba(15, 23, 42, 0.06);
+}
+
+.sales-inbound-pattern-drawer-root--open .sales-inbound-pattern-drawer-panel {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.sales-inbound-pattern-drawer-panel-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 16px 18px 20px;
+  box-sizing: border-box;
+}
+
+.sales-inbound-pattern-drawer-head {
   display: flex;
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 8px 10px;
-  padding: 8px 12px 9px;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.12);
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.sales-inbound-pattern-drawer-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: 0.02em;
+}
+
+.sales-inbound-pattern-drawer-close {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 6px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.55);
+  color: #334155;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.sales-inbound-pattern-drawer-close:hover {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(15, 23, 42, 0.16);
+}
+
+.sales-inbound-pattern-drawer-scope {
+  margin: 10px 0 0;
+  line-height: 1.45;
+  word-break: break-word;
+  flex-shrink: 0;
+}
+
+.sales-inbound-pattern-drawer-body {
+  flex: 1;
+  min-height: 0;
+  margin-top: 14px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sales-inbound-pattern-drawer-empty {
+  margin: 0;
+}
+
+.sales-inbound-pattern-drawer-steps {
+  list-style: none;
+  margin: 0 0 0 6px;
+  padding: 0 0 0 18px;
+  border-left: 2px solid rgba(37, 99, 235, 0.32);
+  display: flex;
+  flex-direction: column;
+}
+
+.sales-inbound-pattern-drawer-step--interval {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  min-height: 2.5rem;
+  margin-left: -21px;
+  padding: 6px 0 6px 20px;
+  list-style: none;
+}
+
+.sales-inbound-pattern-drawer-interval-rail {
+  position: absolute;
+  left: 8px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: rgba(37, 99, 235, 0.22);
+  pointer-events: none;
+}
+
+.sales-inbound-pattern-drawer-interval-badge {
+  position: relative;
+  z-index: 1;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #1d4ed8;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(37, 99, 235, 0.3);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.sales-inbound-pattern-drawer-step--card {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 4px 0 12px 0;
+  margin-left: -21px;
+  padding-left: 4px;
+  list-style: none;
+}
+
+.sales-inbound-pattern-drawer-node-dot {
+  flex-shrink: 0;
+  width: 11px;
+  height: 11px;
+  margin-top: 14px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: #2563eb;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.4);
+}
+
+.sales-inbound-pattern-drawer-node-card {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.07);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.sales-inbound-pattern-drawer-node-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.sales-inbound-pattern-drawer-node-row + .sales-inbound-pattern-drawer-node-row {
+  margin-top: 8px;
+}
+
+.sales-inbound-pattern-drawer-node-label {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #64748b;
+  letter-spacing: 0.03em;
+}
+
+.sales-inbound-pattern-drawer-node-value {
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+
+.sales-inbound-pattern-drawer-node-value--date {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.sales-inbound-pattern-drawer-node-value--qty {
+  color: #1e293b;
+  font-weight: 600;
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .sales-inbound-pattern-drawer-scrim {
+    background: rgba(15, 23, 42, 0.45);
+  }
+
+  .sales-inbound-pattern-drawer-panel {
+    background: rgba(248, 250, 252, 0.97);
+  }
+
+  .sales-inbound-pattern-drawer-node-card {
+    background: #fff;
+  }
 }
 
 .sales-inbound-pattern-subcard--strong .sales-inbound-pattern-subhead {
@@ -3804,12 +4109,12 @@ button.app-config-md-download.linkish {
 
 .sales-inbound-pattern-subhead-title {
   display: block;
-  flex: 1 1 0;
   min-width: 0;
   font-weight: 600;
   font-size: 0.95rem;
   line-height: 1.35;
   color: #0f172a;
+  word-break: break-word;
 }
 
 .sales-inbound-pattern-cv-pill {
@@ -4443,63 +4748,34 @@ button.app-config-md-download.linkish {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
-/* 下级存在强/弱周期性：客户总体行深蓝底白字 */
-.sales-customer-dim-block .sales-customer-dim-level-card--total.sales-customer-dim-level-card--descendant-periodic {
-  border-color: rgba(255, 255, 255, 0.22);
-  background: #172554;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+@keyframes sales-customer-dim-discovered-pill-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(34, 197, 94, 0.4),
+      0 0 10px 1px rgba(34, 197, 94, 0.28);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(187, 247, 208, 0.55),
+      0 0 20px 4px rgba(34, 197, 94, 0.5);
+  }
 }
 
-.sales-customer-dim-level-card--descendant-periodic .sales-customer-dim-block-toggle:hover .sales-customer-dim-block-name,
-.sales-customer-dim-level-card--descendant-periodic .sales-customer-dim-block-name,
-.sales-customer-dim-level-card--descendant-periodic .sales-customer-dim-block-name-value {
-  color: #fff;
-}
-
-.sales-customer-dim-level-card--descendant-periodic .sales-customer-dim-block-dim-label {
-  color: rgba(255, 255, 255, 0.85);
-}
-
-.sales-customer-dim-level-card--descendant-periodic .sales-customer-dim-block-chevron {
-  color: rgba(255, 255, 255, 0.92);
-}
-
-.sales-customer-dim-block .sales-customer-dim-level-card--descendant-periodic .sales-customer-dim-label-icon {
-  color: rgba(255, 255, 255, 0.95);
-}
-
-.sales-customer-dim-level-card--descendant-periodic .sales-customer-dim-metric-label {
-  color: rgba(255, 255, 255, 0.78);
-}
-
-.sales-customer-dim-level-card--descendant-periodic .sales-customer-dim-metric-value {
-  color: #fff;
-}
-
-.sales-customer-dim-level-card--descendant-periodic .sales-customer-dim-periodicity-irregular {
-  color: #bfdbfe;
-}
-
-.sales-customer-dim-level-card--descendant-periodic .sales-customer-dim-periodicity-cvnote {
-  color: rgba(255, 255, 255, 0.68);
-}
-
-.sales-customer-dim-level-card--descendant-periodic .sales-customer-dim-irregular-hidden-metric .muted {
-  color: rgba(255, 255, 255, 0.78);
-}
-
+/* 「发现周期性」：绿底白字 + 光晕闪烁（客户总体行保持与普通汇总行相同浅蓝底） */
 .sales-customer-dim-discovered-periodic-pill {
   flex-shrink: 0;
   margin-left: 2px;
   font-size: 0.68rem;
   font-weight: 600;
   line-height: 1.3;
-  padding: 2px 7px;
+  padding: 2px 9px;
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.38);
+  background: #16a34a;
+  border: 1px solid rgba(255, 255, 255, 0.35);
   color: #fff;
   letter-spacing: 0.02em;
+  animation: sales-customer-dim-discovered-pill-glow 1.85s ease-in-out infinite;
 }
 
 .sales-customer-dim-level-card--total {
@@ -4530,11 +4806,10 @@ button.app-config-md-download.linkish {
 }
 
 @supports not (background: color-mix(in srgb, #fff 50%, #000)) {
-  .sales-customer-dim-block
-    .sales-customer-dim-level-card--total:not(.sales-customer-dim-level-card--descendant-periodic) {
+  .sales-customer-dim-block .sales-customer-dim-level-card--total {
     background: #e4efff;
   }
-  .sales-customer-dim-level-card--total:not(.sales-customer-dim-level-card--descendant-periodic) {
+  .sales-customer-dim-level-card--total {
     background: #eef2ff;
   }
   .sales-customer-dim-level-card--model {
@@ -4565,6 +4840,11 @@ button.app-config-md-download.linkish {
   }
   .sales-customer-dim-block:hover {
     transform: none;
+  }
+
+  .sales-customer-dim-discovered-periodic-pill {
+    animation: none;
+    box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.35);
   }
 }
 

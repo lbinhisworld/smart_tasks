@@ -6,6 +6,7 @@
 
 import {
   type ChangeEvent,
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -13,6 +14,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   calculateOrderSegments,
   classifyOrderQuantityLabel,
@@ -81,6 +83,49 @@ const ORDER_QTY_SEG_TAG_CLASS: Record<OrderSegmentLabel, string> = {
   零散: "sales-order-qty-seg-tag sales-order-qty-seg-tag--fragmented",
 };
 
+/** 与维树一致的底表日期展示串解析（用于时间线间隔天数） */
+function parsePurchaseTimelineDateMs(s: string): number | null {
+  const t = (s ?? "").trim();
+  if (!t || t === "—" || t === "-") return null;
+  const slash = t.replace(/\//g, "-");
+  let n = Date.parse(slash);
+  if (!Number.isNaN(n)) return n;
+  const m = t.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
+  if (m) {
+    n = Date.parse(`${m[1]}-${m[2]!.padStart(2, "0")}-${m[3]!.padStart(2, "0")}`);
+    if (!Number.isNaN(n)) return n;
+  }
+  return null;
+}
+
+function daysBetweenPurchaseDates(prevDate: string, nextDate: string): number | null {
+  const a = parsePurchaseTimelineDateMs(prevDate);
+  const b = parsePurchaseTimelineDateMs(nextDate);
+  if (a === null || b === null) return null;
+  return Math.round((b - a) / 86400000);
+}
+
+/** 进货周期性模式挖掘：标题栏时间线按钮图标 */
+function InboundPatternTimelineIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  );
+}
+
 /** 进货周期性模式挖掘：产品参数与底表「物料标签」同款 pill */
 function InboundPatternProductParamTags({ item }: { item: InboundPeriodicityPatternItem }) {
   return (
@@ -104,6 +149,41 @@ function InboundPatternProductParamTags({ item }: { item: InboundPeriodicityPatt
 
 function InboundPatternSubcardView({ p }: { p: InboundPeriodicityPatternItem }) {
   const isStrong = p.periodicityLabel.trim().split("\n")[0]?.trim() === "强周期性";
+  const [timelineOpen, setTimelineOpen] = useState(false);
+  const [drawerEntered, setDrawerEntered] = useState(false);
+  const timelineTitleId = useId();
+
+  const closeTimeline = useCallback(() => setTimelineOpen(false), []);
+
+  useEffect(() => {
+    if (!timelineOpen) {
+      setDrawerEntered(false);
+      return;
+    }
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => setDrawerEntered(true));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [timelineOpen]);
+
+  useEffect(() => {
+    if (!timelineOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setTimelineOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [timelineOpen]);
+
+  useEffect(() => {
+    if (!timelineOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [timelineOpen]);
+
   return (
     <div
       className={[
@@ -114,13 +194,26 @@ function InboundPatternSubcardView({ p }: { p: InboundPeriodicityPatternItem }) 
     >
       <div className="sales-inbound-pattern-subhead">
         <span className="sales-inbound-pattern-subhead-title task-text-wrap">{p.customerName}</span>
-        <span
-          className="sales-inbound-pattern-cv-pill"
-          title={`CV ${p.cv}`}
-          aria-label={`CV 值 ${p.cv}`}
-        >
-          {p.cv}
-        </span>
+        <div className="sales-inbound-pattern-subhead-right">
+          <button
+            type="button"
+            className="sales-inbound-pattern-timeline-trigger"
+            onClick={() => setTimelineOpen((o) => !o)}
+            aria-expanded={timelineOpen}
+            aria-controls={timelineOpen ? `${p.key}-timeline-drawer` : undefined}
+            title="查看采购时间线"
+            aria-label="查看当前参数模式下的采购时间线"
+          >
+            <InboundPatternTimelineIcon />
+          </button>
+          <span
+            className="sales-inbound-pattern-cv-pill"
+            title={`CV ${p.cv}`}
+            aria-label={`CV 值 ${p.cv}`}
+          >
+            {p.cv}
+          </span>
+        </div>
       </div>
       <div className="sales-inbound-pattern-subbody">
         <dl className="sales-inbound-pattern-dl">
@@ -152,6 +245,108 @@ function InboundPatternSubcardView({ p }: { p: InboundPeriodicityPatternItem }) 
           </div>
         </dl>
       </div>
+      {timelineOpen
+        ? createPortal(
+            <div
+              id={`${p.key}-timeline-drawer`}
+              className={[
+                "sales-inbound-pattern-drawer-root",
+                drawerEntered ? "sales-inbound-pattern-drawer-root--open" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
+              <button
+                type="button"
+                className="sales-inbound-pattern-drawer-scrim"
+                aria-label="关闭采购时间线"
+                onClick={closeTimeline}
+              />
+              <aside
+                className="sales-inbound-pattern-drawer-panel"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={timelineTitleId}
+              >
+                <div className="sales-inbound-pattern-drawer-panel-inner">
+                  <div className="sales-inbound-pattern-drawer-head">
+                    <span id={timelineTitleId} className="sales-inbound-pattern-drawer-title">
+                      采购时间线
+                    </span>
+                    <button
+                      type="button"
+                      className="sales-inbound-pattern-drawer-close"
+                      onClick={closeTimeline}
+                      aria-label="关闭采购时间线"
+                    >
+                      关闭
+                    </button>
+                  </div>
+                  <p className="sales-inbound-pattern-drawer-scope muted small">
+                    {p.customerName}
+                    {!p.isProductScopeTotal && p.productMaterialTags.length > 0 ? (
+                      <>
+                        {" · "}
+                        {p.productMaterialTags.map((t) => t.text).join(" / ")}
+                      </>
+                    ) : null}
+                    {p.isProductScopeTotal ? " · 总体" : null}
+                  </p>
+                  <div className="sales-inbound-pattern-drawer-body">
+                    {p.purchaseTimeline.length === 0 ? (
+                      <p className="sales-inbound-pattern-drawer-empty muted small" role="status">
+                        暂无对应底表采购行。
+                      </p>
+                    ) : (
+                      <ol className="sales-inbound-pattern-drawer-steps">
+                        {p.purchaseTimeline.map((node, idx) => {
+                          const gapDays =
+                            idx > 0
+                              ? daysBetweenPurchaseDates(p.purchaseTimeline[idx - 1]!.date, node.date)
+                              : null;
+                          const gapLabel =
+                            gapDays === null
+                              ? "间隔 —"
+                              : gapDays >= 0
+                                ? `+${gapDays}天`
+                                : `${gapDays}天`;
+                          return (
+                            <Fragment key={`${p.key}-tl-${idx}`}>
+                              {idx > 0 ? (
+                                <li className="sales-inbound-pattern-drawer-step sales-inbound-pattern-drawer-step--interval">
+                                  <span className="sales-inbound-pattern-drawer-interval-rail" aria-hidden />
+                                  <span className="sales-inbound-pattern-drawer-interval-badge">{gapLabel}</span>
+                                </li>
+                              ) : null}
+                              <li className="sales-inbound-pattern-drawer-step sales-inbound-pattern-drawer-step--card">
+                                <span className="sales-inbound-pattern-drawer-node-dot" aria-hidden />
+                                <div className="sales-inbound-pattern-drawer-node-card">
+                                  <div className="sales-inbound-pattern-drawer-node-row">
+                                    <span className="sales-inbound-pattern-drawer-node-label">采购日期</span>
+                                    <span className="sales-inbound-pattern-drawer-node-value sales-inbound-pattern-drawer-node-value--date">
+                                      {node.date}
+                                    </span>
+                                  </div>
+                                  <div className="sales-inbound-pattern-drawer-node-row">
+                                    <span className="sales-inbound-pattern-drawer-node-label">下单数量</span>
+                                    <span className="sales-inbound-pattern-drawer-node-value sales-inbound-pattern-drawer-node-value--qty">
+                                      {node.quantity}
+                                    </span>
+                                  </div>
+                                </div>
+                              </li>
+                            </Fragment>
+                          );
+                        })}
+                      </ol>
+                    )}
+                  </div>
+                </div>
+              </aside>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -1868,14 +2063,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                   aria-expanded={expanded}
                 >
                   <div className="sales-customer-dim-block-shell">
-                    <div
-                      className={[
-                        "sales-customer-dim-level-card sales-customer-dim-level-card--total",
-                        showPeriodicDiscoveryHighlight ? "sales-customer-dim-level-card--descendant-periodic" : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
-                    >
+                    <div className="sales-customer-dim-level-card sales-customer-dim-level-card--total">
                       <div className="sales-customer-dim-level-line">
                         <div className="sales-customer-dim-level-tree">
                           <button
