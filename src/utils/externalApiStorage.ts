@@ -5,6 +5,7 @@
  */
 
 import type { DataPlatform, ExternalApiProfile } from "../types/externalApiProfile";
+import { DEFAULT_GROUP_SCRIPT_SPEC } from "./dataHubScriptCleaning";
 
 const LEGACY_KEY = "qifeng_external_api_profiles_v1";
 const STATE_KEY = "qifeng_data_hub_state_v1";
@@ -36,6 +37,22 @@ function normalizeProfile(raw: unknown, defaultPlatformId: string): ExternalApiP
   const headers = Array.isArray(o.headers) ? o.headers.filter(isHeaderRow) : [];
   const platformId =
     typeof o.platformId === "string" && o.platformId.trim() ? o.platformId.trim() : defaultPlatformId;
+  const jsonCleaningRules =
+    typeof o.jsonCleaningRules === "string"
+      ? o.jsonCleaningRules
+      : typeof (o as { customDataFormatPrompt?: unknown }).customDataFormatPrompt === "string"
+        ? String((o as { customDataFormatPrompt: string }).customDataFormatPrompt)
+        : undefined;
+  const explicitMode =
+    o.jsonCleaningMode === "script" || o.jsonCleaningMode === "llm" ? o.jsonCleaningMode : undefined;
+  /** 未显式保存过时：有自然语言规则视为大模型；否则默认脚本（新接口主路径）。 */
+  const jsonCleaningMode: "llm" | "script" =
+    explicitMode ?? (jsonCleaningRules?.trim() ? "llm" : "script");
+  let jsonCleaningScriptSpec =
+    typeof o.jsonCleaningScriptSpec === "string" ? o.jsonCleaningScriptSpec : undefined;
+  if (jsonCleaningMode === "script" && (!jsonCleaningScriptSpec || !jsonCleaningScriptSpec.trim())) {
+    jsonCleaningScriptSpec = JSON.stringify(DEFAULT_GROUP_SCRIPT_SPEC);
+  }
   return {
     id,
     platformId,
@@ -53,12 +70,9 @@ function normalizeProfile(raw: unknown, defaultPlatformId: string): ExternalApiP
     visibleBusinessFields: Array.isArray(o.visibleBusinessFields)
       ? (o.visibleBusinessFields as unknown[]).filter((x): x is string => typeof x === "string")
       : undefined,
-    jsonCleaningRules:
-      typeof o.jsonCleaningRules === "string"
-        ? o.jsonCleaningRules
-        : typeof (o as { customDataFormatPrompt?: unknown }).customDataFormatPrompt === "string"
-          ? String((o as { customDataFormatPrompt: string }).customDataFormatPrompt)
-          : undefined,
+    jsonCleaningRules,
+    jsonCleaningMode,
+    jsonCleaningScriptSpec,
   };
 }
 
@@ -179,5 +193,7 @@ export function createEmptyProfile(platformId: string): ExternalApiProfile {
     body: "",
     notes: "",
     updatedAt: Date.now(),
+    jsonCleaningMode: "script",
+    jsonCleaningScriptSpec: JSON.stringify(DEFAULT_GROUP_SCRIPT_SPEC),
   };
 }

@@ -1,5 +1,5 @@
 /**
- * @fileoverview 报告管理页：双 Tab「报告提取」（上传/解析/预览；「报告内容提取」、按分公司「更新现有任务进度」、从 6.1/6.2 生成「日报计划任务」）与「提取历史」；处理从看板跳转的焦点与高亮并切至历史 Tab。
+ * @fileoverview 报告管理页：Tab「日报列表」「议题管理」「报告提取」「提取历史」；日报列表为数据中台只读列表；议题管理为晨会议题与派发任务；报告提取含上传/解析/预览与任务联动；提取历史为时间线；并处理从看板跳转的焦点与高亮。
  *
  * **设计要点**
  * - `consumeExtractionFocusFromStorage`：挂载时 `useLayoutEffect` 读一次；另监听 `OPEN_REPORTS_PAGE_EVENT`，在报告页已挂载时也能消费看板「跳转原文」写入的 `sessionStorage`。
@@ -76,6 +76,9 @@ import {
   readLlmEnv,
 } from "../utils/llmExtract";
 import { ExtractionHistoryList } from "./ExtractionHistoryList";
+import { MorningTopicPanel } from "./MorningTopicPanel";
+import type { DailyTopicDraftPayload } from "../utils/dailyReportTopicHighlightStorage";
+import { ReportDailyListPanel } from "./ReportDailyListPanel";
 import { ReportJsonPreview } from "./ReportJsonPreview";
 import { collectReportCompanyDailySlices } from "../utils/reportCompanyDailySlices";
 import { appendTaskProgressEntry } from "../utils/taskProgressTracking";
@@ -100,7 +103,7 @@ import type { Task, TaskStatus } from "../types/task";
 
 type Phase = "idle" | "reading" | "calling" | "done" | "error";
 
-type ReportMgmtTab = "extract" | "history";
+type ReportMgmtTab = "dailyList" | "morningTopics" | "extract" | "history";
 
 /** 与看板「日报计划」一致：文首拼接当前领导视角（领导指示为空时不加）。 */
 function mergePerspectiveLeaderPrefix(perspective: string, existing: string): string {
@@ -126,12 +129,20 @@ function aggregateLlmStats(parts: LlmCallStats[]): LlmCallStats | null {
   };
 }
 
-/** 懒加载于 `App` 的「报告」路由；双 Tab：报告提取 / 提取历史。 */
+/** 懒加载于 `App` 的「报告」路由；Tab：日报列表 / 议题管理 / 报告提取 / 提取历史。 */
 export function ReportManagement() {
   const { user, visibleTasks, tasks, addTask, updateTask } = useTasks();
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
   const [reportMgmtTab, setReportMgmtTab] = useState<ReportMgmtTab>("extract");
+  /** 从日报详情「添加至议题」带入的草稿（保存议题后写入高亮并清空） */
+  const [dailyTopicDraft, setDailyTopicDraft] = useState<DailyTopicDraftPayload | null>(null);
+  const [dailyHighlightNonce, setDailyHighlightNonce] = useState(0);
+  const onDailyTopicDraftCommitted = useCallback(() => {
+    setDailyHighlightNonce((n) => n + 1);
+    setDailyTopicDraft(null);
+  }, []);
+  const onDailyTopicDraftCancelled = useCallback(() => setDailyTopicDraft(null), []);
   const inputId = useId();
   const importHistoryInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1372,6 +1383,24 @@ export function ReportManagement() {
         <button
           type="button"
           role="tab"
+          aria-selected={reportMgmtTab === "dailyList"}
+          className={`report-main-tab${reportMgmtTab === "dailyList" ? " is-active" : ""}`}
+          onClick={() => setReportMgmtTab("dailyList")}
+        >
+          日报列表
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={reportMgmtTab === "morningTopics"}
+          className={`report-main-tab${reportMgmtTab === "morningTopics" ? " is-active" : ""}`}
+          onClick={() => setReportMgmtTab("morningTopics")}
+        >
+          议题管理
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={reportMgmtTab === "extract"}
           className={`report-main-tab${reportMgmtTab === "extract" ? " is-active" : ""}`}
           onClick={() => setReportMgmtTab("extract")}
@@ -1388,6 +1417,24 @@ export function ReportManagement() {
           提取历史
         </button>
       </div>
+
+      {reportMgmtTab === "dailyList" && (
+        <ReportDailyListPanel
+          highlightNonce={dailyHighlightNonce}
+          onAddToTopic={(payload) => {
+            setDailyTopicDraft(payload);
+            setReportMgmtTab("morningTopics");
+          }}
+        />
+      )}
+
+      {reportMgmtTab === "morningTopics" && (
+        <MorningTopicPanel
+          dailyTopicDraft={dailyTopicDraft}
+          onDailyTopicDraftCommitted={onDailyTopicDraftCommitted}
+          onDailyTopicDraftCancelled={onDailyTopicDraftCancelled}
+        />
+      )}
 
       {reportMgmtTab === "extract" && (
       <section className="card report-tab-panel">

@@ -1,5 +1,5 @@
 /**
- * @fileoverview 数据中台页：按数据源分组的接口配置、cURL 导入、测试；数据列表（业务数据 / 原始 JSON / 清洗后 JSON）与单元格右侧详情抽屉。
+ * @fileoverview 数据中台页：按数据源分组的接口配置、cURL 导入、测试；数据列表（业务数据 / 原始 JSON / 清洗后 JSON）；清洗支持大模型或本地脚本分组；单元格右侧详情抽屉。
  * 受浏览器 CORS 限制时需在 Vite 配置代理或由后端转发。
  *
  * @module DataSync
@@ -14,6 +14,12 @@ import {
   DATA_HUB_JSON_CLEANING_SYSTEM,
   formatCleanedJsonOutput,
 } from "../utils/dataHubJsonCleaning";
+import {
+  DEFAULT_GROUP_SCRIPT_SPEC,
+  parseScriptCleaningSpec,
+  runGroupBranchWorkshopDateCleaning,
+  type DataHubGroupByBranchWorkshopDateSpec,
+} from "../utils/dataHubScriptCleaning";
 import {
   createEmptyPlatform,
   createEmptyProfile,
@@ -126,6 +132,11 @@ export function DataSync() {
   const [cellDetail, setCellDetail] = useState<CellDetailState | null>(null);
 
   const [cleaningRulesDraft, setCleaningRulesDraft] = useState("");
+  /** 与保存配置一致：大模型清洗 vs 本地脚本分组 */
+  const [cleaningModeDraft, setCleaningModeDraft] = useState<"llm" | "script">("script");
+  const [scriptSpecForm, setScriptSpecForm] = useState<DataHubGroupByBranchWorkshopDateSpec>(
+    () => ({ ...DEFAULT_GROUP_SCRIPT_SPEC }),
+  );
   const [cleaningPhase, setCleaningPhase] = useState<"idle" | "running">("idle");
   const [cleaningError, setCleaningError] = useState<string | null>(null);
   const [cleanedJsonText, setCleanedJsonText] = useState<string>("");
@@ -140,6 +151,17 @@ export function DataSync() {
   /** 已持久化的清洗规则（用于自动重算依赖，避免 profiles 引用抖动）。 */
   const savedJsonCleaningRules = useMemo(
     () => (selectedId ? profiles.find((p) => p.id === selectedId)?.jsonCleaningRules ?? "" : ""),
+    [profiles, selectedId],
+  );
+
+  const savedJsonCleaningMode = useMemo<"llm" | "script">(() => {
+    if (!selectedId) return "script";
+    const m = profiles.find((p) => p.id === selectedId)?.jsonCleaningMode;
+    return m === "llm" ? "llm" : "script";
+  }, [profiles, selectedId]);
+
+  const savedJsonCleaningScriptSpec = useMemo(
+    () => (selectedId ? profiles.find((p) => p.id === selectedId)?.jsonCleaningScriptSpec ?? "" : ""),
     [profiles, selectedId],
   );
 
@@ -163,7 +185,10 @@ export function DataSync() {
 
   useEffect(() => {
     setCleaningRulesDraft(selected?.jsonCleaningRules ?? "");
-  }, [selectedId, selected?.jsonCleaningRules]);
+    setCleaningModeDraft(selected?.jsonCleaningMode === "llm" ? "llm" : "script");
+    const parsed = parseScriptCleaningSpec(selected?.jsonCleaningScriptSpec);
+    setScriptSpecForm(parsed ?? { ...DEFAULT_GROUP_SCRIPT_SPEC });
+  }, [selectedId, selected?.jsonCleaningRules, selected?.jsonCleaningMode, selected?.jsonCleaningScriptSpec]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -212,18 +237,73 @@ export function DataSync() {
     [platforms, profiles, persist],
   );
 
-  /** 保存清洗规则到当前接口配置（保存后由下方 effect 根据原始 JSON 自动重算）。 */
+  /** 保存清洗方式、自然语言规则与脚本分组配置（保存后由下方 effect 根据原始 JSON 自动重算）。 */
   const handleSaveCleaningRules = useCallback(() => {
     if (!selected) return;
-    updateProfile(selected.id, { jsonCleaningRules: cleaningRulesDraft.trim() });
-  }, [selected, cleaningRulesDraft, updateProfile]);
+    let scriptSpecStr = "";
+    try {
+      scriptSpecStr = JSON.stringify(scriptSpecForm);
+    } catch {
+      scriptSpecStr = "";
+    }
+    updateProfile(selected.id, {
+      jsonCleaningRules: cleaningRulesDraft.trim(),
+      jsonCleaningMode: cleaningModeDraft,
+      jsonCleaningScriptSpec: scriptSpecStr,
+    });
+  }, [selected, cleaningRulesDraft, cleaningModeDraft, scriptSpecForm, updateProfile]);
 
-  /** 原始 JSON 或已保存的清洗规则变化时，自动重新生成清洗后的 JSON。 */
+  /**
+   * 原始 JSON 或已保存的清洗配置变化时，自动重新生成清洗后的 JSON。
+   * - `script`：本地分组，不调用大模型、不受输出 token 截断限制。
+   * - `llm`：沿用自然语言 + 大模型。
+   */
   useEffect(() => {
     if (!selectedId) return;
-    const rules = savedJsonCleaningRules.trim();
     const raw = cachedResponseBody.trim();
-    if (!rules || !raw) {
+    if (!raw) {
+      cleaningSeqRef.current += 1;
+      setCleanedJsonText("");
+      setCleaningError(null);
+      setCleaningPhase("idle");
+      return;
+    }
+
+    if (savedJsonCleaningMode === "script") {
+      cleaningSeqRef.current += 1;
+      const mySeq = ++cleaningSeqRef.current;
+      const tid = window.setTimeout(() => {
+        if (mySeq !== cleaningSeqRef.current) return;
+        const spec = parseScriptCleaningSpec(savedJsonCleaningScriptSpec);
+        if (!spec) {
+          setCleaningError(
+            "脚本清洗：已保存的「分组脚本配置」无效或为空。请填写下方字段后点击「保存清洗规则」。",
+          );
+          setCleanedJsonText("");
+          setCleaningPhase("idle");
+          return;
+        }
+        const result = runGroupBranchWorkshopDateCleaning(raw, spec);
+        if (mySeq !== cleaningSeqRef.current) return;
+        if (!result.ok) {
+          setCleaningError(result.error);
+          setCleanedJsonText("");
+        } else {
+          setCleaningError(null);
+          setCleanedJsonText(result.text);
+          try {
+            sessionStorage.setItem(DATA_HUB_CLEANED_JSON_PREFIX + selectedId, result.text);
+          } catch {
+            /* quota */
+          }
+        }
+        setCleaningPhase("idle");
+      }, 0);
+      return () => window.clearTimeout(tid);
+    }
+
+    const rules = savedJsonCleaningRules.trim();
+    if (!rules) {
       cleaningSeqRef.current += 1;
       setCleanedJsonText("");
       setCleaningError(null);
@@ -279,7 +359,14 @@ export function DataSync() {
       })();
     }, 650);
     return () => window.clearTimeout(t);
-  }, [cachedResponseBody, selectedId, savedJsonCleaningRules, llmEpoch]);
+  }, [
+    cachedResponseBody,
+    selectedId,
+    savedJsonCleaningRules,
+    savedJsonCleaningMode,
+    savedJsonCleaningScriptSpec,
+    llmEpoch,
+  ]);
 
   const parsedJson = useMemo(() => {
     const raw = cachedResponseBody.trim();
@@ -393,6 +480,10 @@ export function DataSync() {
     }
   };
 
+  /**
+   * 解析 cURL 并写入 URL / 方法 / 请求头；若 cURL 中**未解析出非空请求体**，则**不改动**当前「请求体」配置，避免误清空。
+   * 「从 cURL 导入」粘贴区在解析成功后**不会自动清空**，由用户自行编辑或清空。
+   */
   const handleImportCurl = () => {
     setImportError(null);
     setImportWarnings([]);
@@ -403,12 +494,15 @@ export function DataSync() {
     try {
       const parsed = parseCurl(curlImportText);
       setImportWarnings(parsed.warnings);
-      updateProfile(selectedId, {
+      const patch: Partial<ExternalApiProfile> = {
         method: parsed.method,
         url: parsed.url,
         headers: parsed.headers,
-        body: parsed.body,
-      });
+      };
+      if (parsed.body.trim() !== "") {
+        patch.body = parsed.body;
+      }
+      updateProfile(selectedId, patch);
     } catch (e) {
       setImportError(e instanceof Error ? e.message : String(e));
     }
@@ -465,11 +559,23 @@ export function DataSync() {
       setCachedResponseBody(preview);
 
       const summary = `HTTP ${res.status} · ${ms} ms · 响应约 ${text.length} 字符`;
+      let scriptSpecStr = "";
+      try {
+        scriptSpecStr = JSON.stringify(scriptSpecForm);
+      } catch {
+        scriptSpecStr = "";
+      }
       updateProfile(selected.id, {
         lastTestAt: Date.now(),
         lastTestOk: res.ok,
         lastTestSummary: summary,
-        ...(res.ok ? { jsonCleaningRules: cleaningRulesDraft.trim() } : {}),
+        ...(res.ok
+          ? {
+              jsonCleaningRules: cleaningRulesDraft.trim(),
+              jsonCleaningMode: cleaningModeDraft,
+              jsonCleaningScriptSpec: scriptSpecStr,
+            }
+          : {}),
       });
     } catch (e) {
       const msg =
@@ -703,7 +809,7 @@ export function DataSync() {
         <div className="card data-sync-form-card data-sync-card--sub">
           <h2 className="data-sync-card-title">从 cURL 导入</h2>
           <p className="muted tiny data-sync-hint">
-            粘贴 Apifox「复制 cURL」后解析，将覆盖当前 URL、方法、请求头与 Body。
+            粘贴 Apifox「复制 cURL」后解析，将覆盖当前 URL、方法、请求头；若 cURL 中带非空 Body 则一并写入请求体，否则保留原请求体。解析后不会清空本框，可自行编辑或删除。
           </p>
           <textarea
             className="fld data-sync-curl data-sync-textarea-fill"
@@ -738,7 +844,7 @@ export function DataSync() {
             </button>
           </div>
           <p className="muted tiny data-sync-hint">
-            测试返回成功（2xx）时，会自动将「数据列表 → 清洗后的 JSON」中的<strong>当前清洗规则草稿</strong>写入配置，并触发清洗逻辑（与点击「保存清洗规则」相同）。请在「数据列表」中查看业务数据、原始 JSON 与清洗结果。
+            测试返回成功（2xx）时，会自动将「数据列表 → 清洗后的 JSON」中的<strong>当前清洗方式、自然语言规则与脚本分组配置草稿</strong>写入配置，并触发清洗结果生成（与点击「保存清洗规则」相同）。请在「数据列表」中查看业务数据、原始 JSON 与清洗结果。
           </p>
           {testError ? <p className="data-sync-error">{testError}</p> : null}
           {testHttpStatus !== null ? (
@@ -779,30 +885,127 @@ export function DataSync() {
     <div className="card data-sync-form-card data-sync-data-card data-sync-custom-panel">
       <h2 className="data-sync-card-title">清洗后的 JSON</h2>
       <p className="muted tiny data-sync-hint">
-        在此维护<strong>自然语言清洗规则</strong>并保存。下方展示基于「原始 JSON」自动清洗后的结构化 JSON；接口测试<strong>成功（2xx）</strong>时会自动写入当前规则并重新清洗；若仅修改规则未测接口，可点击「保存清洗规则」。
-        {llmEnvReady ? (
-          <span className="data-sync-llm-ok"> 已检测到可用的大模型配置。</span>
+        默认推荐<strong>脚本（本地分组）</strong>；也可切换为<strong>大模型（自然语言）</strong>。保存后按所选方式基于「原始 JSON」生成结果；接口测试<strong>成功（2xx）</strong>时会自动写入当前页草稿并触发清洗；若仅修改未测接口，可点击「保存清洗规则」。
+        {cleaningModeDraft === "llm" ? (
+          llmEnvReady ? (
+            <span className="data-sync-llm-ok"> 已检测到可用的大模型配置。</span>
+          ) : (
+            <span className="data-sync-llm-miss"> 请先在顶部「设置」中配置 DeepSeek API Key。</span>
+          )
         ) : (
-          <span className="data-sync-llm-miss"> 请先在顶部「设置」中配置 DeepSeek API Key。</span>
+          <span className="data-sync-llm-ok"> 脚本模式不调用大模型，适合长 JSON 与确定性分组。</span>
         )}
       </p>
-      <label>
-        自定义清洗规则（自然语言）
-        <textarea
-          className="fld data-sync-custom-prompt"
-          value={cleaningRulesDraft}
-          onChange={(e) => setCleaningRulesDraft(e.target.value)}
-          spellCheck={false}
-          placeholder={CLEANING_RULES_PLACEHOLDER}
-          rows={8}
-        />
-      </label>
+      <div className="data-sync-cleaning-mode-row" role="radiogroup" aria-label="清洗方式">
+        <span className="data-sync-cleaning-mode-label muted tiny">清洗方式</span>
+        <label className="data-sync-cleaning-mode-opt">
+          <input
+            type="radio"
+            name={`data-hub-cleaning-mode-${selected.id}`}
+            checked={cleaningModeDraft === "script"}
+            onChange={() => setCleaningModeDraft("script")}
+          />
+          脚本（本地分组）
+        </label>
+        <label className="data-sync-cleaning-mode-opt">
+          <input
+            type="radio"
+            name={`data-hub-cleaning-mode-${selected.id}`}
+            checked={cleaningModeDraft === "llm"}
+            onChange={() => setCleaningModeDraft("llm")}
+          />
+          大模型（自然语言）
+        </label>
+      </div>
+      {cleaningModeDraft === "llm" ? (
+        <label>
+          自定义清洗规则（自然语言）
+          <textarea
+            className="fld data-sync-custom-prompt"
+            value={cleaningRulesDraft}
+            onChange={(e) => setCleaningRulesDraft(e.target.value)}
+            spellCheck={false}
+            placeholder={CLEANING_RULES_PLACEHOLDER}
+            rows={8}
+          />
+        </label>
+      ) : (
+        <div className="data-sync-script-cleaning-block">
+          <p className="muted tiny">
+            将「列表路径」解析为数组后，对每一项取「行对象路径」上的对象，再按下列<strong>键名</strong>从行对象上读值并聚合为
+            <code> 分公司名称 + 日报日期 + 车间日报列表[] </code>
+            结构输出。键名须与<strong>原始 JSON</strong>中行对象内字段一致，可按接口实际列名自由修改（如 <code>分公司名称</code>、<code>所属车间</code> 等）。
+          </p>
+          <div className="data-sync-script-fields">
+            <label>
+              列表路径（点分，空=根为数组）
+              <input
+                className="fld"
+                value={scriptSpecForm.listPath}
+                onChange={(e) => setScriptSpecForm((s) => ({ ...s, listPath: e.target.value }))}
+                placeholder="如 data.list"
+                spellCheck={false}
+              />
+            </label>
+            <label>
+              行对象路径（点分，空=列表项即行）
+              <input
+                className="fld"
+                value={scriptSpecForm.itemPath}
+                onChange={(e) => setScriptSpecForm((s) => ({ ...s, itemPath: e.target.value }))}
+                placeholder="如 variables"
+                spellCheck={false}
+              />
+            </label>
+            <label>
+              分公司字段名（行对象上的键）
+              <input
+                className="fld"
+                value={scriptSpecForm.branchField}
+                onChange={(e) => setScriptSpecForm((s) => ({ ...s, branchField: e.target.value }))}
+                placeholder="如 所属分公司"
+                spellCheck={false}
+              />
+            </label>
+            <label>
+              车间字段名（行对象上的键）
+              <input
+                className="fld"
+                value={scriptSpecForm.workshopField}
+                onChange={(e) => setScriptSpecForm((s) => ({ ...s, workshopField: e.target.value }))}
+                placeholder="如 所属车间"
+                spellCheck={false}
+              />
+            </label>
+            <label>
+              日报日期字段名（行对象上的键）
+              <input
+                className="fld"
+                value={scriptSpecForm.dateField}
+                onChange={(e) => setScriptSpecForm((s) => ({ ...s, dateField: e.target.value }))}
+                placeholder="如 日报日期"
+                spellCheck={false}
+              />
+            </label>
+            <label>
+              正文/详情字段名（行对象上的键）
+              <input
+                className="fld"
+                value={scriptSpecForm.detailField}
+                onChange={(e) => setScriptSpecForm((s) => ({ ...s, detailField: e.target.value }))}
+                placeholder="如 日报内容"
+                spellCheck={false}
+              />
+            </label>
+          </div>
+        </div>
+      )}
       <div className="data-sync-custom-actions">
         <button type="button" className="primary-btn" onClick={handleSaveCleaningRules}>
           保存清洗规则
         </button>
-        {cleaningPhase === "running" ? (
-          <span className="muted tiny data-sync-cleaning-status">正在根据规则清洗 JSON…</span>
+        {cleaningPhase === "running" && cleaningModeDraft === "llm" ? (
+          <span className="muted tiny data-sync-cleaning-status">正在根据规则调用大模型清洗 JSON…</span>
         ) : null}
       </div>
       {cleaningError ? <p className="data-sync-error">{cleaningError}</p> : null}
@@ -813,9 +1016,17 @@ export function DataSync() {
         </div>
       ) : (
         <p className="muted tiny">
-          {savedJsonCleaningRules.trim() && cachedResponseBody.trim()
-            ? "清洗结果将显示在此处。"
-            : "请先发送接口测试以获取原始 JSON；测试成功后会自动保存当前清洗规则并生成结果，亦可手动点击「保存清洗规则」。"}
+          {!cachedResponseBody.trim()
+            ? "请先发送接口测试以获取原始 JSON；测试成功后会自动保存当前配置并生成结果，亦可手动点击「保存清洗规则」。"
+            : savedJsonCleaningMode === "script"
+              ? savedJsonCleaningScriptSpec.trim()
+                ? "若脚本配置有效，清洗结果将显示在此处；若上方有错误提示，请修正字段后再次保存。"
+                : "脚本模式：请填写分组字段并点击「保存清洗规则」。"
+              : savedJsonCleaningRules.trim()
+                ? llmEnvReady
+                  ? "清洗结果将显示在此处。"
+                  : "请在顶部「设置」中配置大模型。"
+                : "请填写自然语言清洗规则并保存。"}
         </p>
       )}
     </div>
@@ -832,7 +1043,7 @@ export function DataSync() {
           <details className="data-sync-field-picker">
             <summary>自定义展示字段（列）</summary>
             <p className="muted tiny data-sync-field-picker-dnd-hint">
-              拖动左侧「⠿」手柄调整字段顺序，下方「数据view」表格列会同步更新；未勾选的列不会出现在表格中。
+              拖动「⠿」手柄调整字段顺序（横向排列、自动换行），下方「数据view」表格列会同步更新；未勾选的列不会出现在表格中。
             </p>
             <div className="data-sync-field-picker-actions">
               <button type="button" className="ghost-btn tiny-btn" onClick={() => setAllVisible(true)}>

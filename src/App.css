@@ -1141,6 +1141,194 @@ button.linkish:hover {
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 
+/* 报告管理 · 日报列表（数据中台 VIEW 同源只读） */
+.report-daily-list-panel .report-daily-list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.report-daily-list-head--toolbar-only {
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.report-daily-list-toolbar {
+  flex-shrink: 0;
+}
+
+.report-daily-list-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  margin-bottom: 14px;
+}
+
+.report-daily-list-source-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: min(100%, 360px);
+}
+
+.report-daily-list-source-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.report-daily-list-select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 0.88rem;
+  background: #fff;
+  max-width: 100%;
+}
+
+.report-daily-list-meta {
+  align-self: flex-end;
+}
+
+.report-daily-list-hint {
+  margin: 0 0 12px;
+}
+
+.report-daily-list-hint.warn {
+  color: #b45309;
+}
+
+.report-daily-list-filters {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+}
+
+.report-daily-list-filters-title {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.report-daily-list-filters-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px 14px;
+  margin-bottom: 10px;
+}
+
+.report-daily-list-filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.report-daily-list-filter-item input {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.report-daily-list-filters-grid--compact {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+
+.report-daily-list-filter-select,
+.report-daily-list-filter-item .fld {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.report-daily-list-date-input {
+  min-height: 36px;
+}
+
+.report-daily-list-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.report-daily-list-detail-btn {
+  display: inline-block;
+  max-width: 100%;
+  margin: 0;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+.report-daily-list-detail-btn:hover {
+  color: #153e75;
+}
+
+.report-daily-list-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.report-daily-list-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.report-daily-list-table th,
+.report-daily-list-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.report-daily-list-table th {
+  background: #f1f5f9;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 去掉「提交时间」列后，给日报详情更多横向空间 */
+.report-daily-list-table th:nth-child(5),
+.report-daily-list-table td:nth-child(5) {
+  min-width: min(360px, 48vw);
+  max-width: 56vw;
+}
+
+.report-daily-list-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.report-daily-list-empty-cell {
+  text-align: center;
+  color: var(--muted);
+  padding: 24px 12px !important;
+}
+
+.report-daily-list-foot {
+  margin: 10px 0 0;
+}
+
 .report-dashboard-tab {
   padding-top: 2px;
 }
@@ -2991,6 +3179,296 @@ tr.task-table-data-row.is-detail-open {
 
 .modal-form {
   margin-top: 8px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.danger-text {
+  color: #b91c1c;
+}
+
+/* 日报详情抽屉：底部操作区 + 可选中文本 */
+.data-sync-drawer-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.report-daily-detail-pre-selectable {
+  user-select: text;
+}
+
+.report-daily-topic-highlight {
+  background: #fff59d;
+  color: inherit;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+.report-daily-detail-plain-seg {
+  white-space: inherit;
+}
+
+/* 报告管理：晨会议题 */
+.report-morning-topic-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.report-morning-topic-toolbar,
+.report-morning-topic-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+}
+
+.report-morning-topic-toolbar label,
+.report-morning-topic-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.report-morning-topic-toolbar select,
+.report-morning-topic-filter select {
+  min-width: 120px;
+}
+
+.report-morning-topic-head {
+  align-items: flex-start;
+}
+
+.report-morning-topic-title {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+}
+
+.report-morning-topic-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 0.85rem;
+}
+
+.report-morning-topic-modal-field span {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.report-morning-topic-modal-field input,
+.report-morning-topic-modal-field textarea,
+.report-morning-topic-modal-field select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.report-morning-topic-table-outer {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.report-morning-topic-desc-cell {
+  min-width: 0;
+  max-width: none;
+}
+
+.report-morning-topic-desc-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.report-morning-topic-snippet-cell {
+  min-width: 0;
+  vertical-align: middle;
+}
+
+.report-morning-topic-snippet {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  color: var(--text);
+  max-height: 2.75em;
+}
+
+.report-morning-topic-snippet.is-empty {
+  color: var(--muted);
+}
+
+.report-morning-topic-td-nowrap {
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.report-morning-topic-td-part {
+  max-width: 6.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.report-morning-topic-td-actions {
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.report-morning-topic-td-tasks {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.report-morning-topic-status-select {
+  max-width: 5.25rem;
+  font-size: 0.76rem;
+  padding: 4px 4px;
+}
+
+.report-morning-topic-table.report-daily-list-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.report-morning-topic-table col.rmt-col-desc {
+  width: 11%;
+}
+
+.report-morning-topic-table col.rmt-col-cat {
+  width: 5%;
+}
+
+.report-morning-topic-table col.rmt-col-part {
+  width: 6%;
+}
+
+.report-morning-topic-table col.rmt-col-discuss {
+  width: 9%;
+}
+
+.report-morning-topic-table col.rmt-col-created {
+  width: 9%;
+}
+
+.report-morning-topic-table col.rmt-col-snip {
+  width: 8%;
+}
+
+.report-morning-topic-table col.rmt-col-status {
+  width: 7%;
+}
+
+.report-morning-topic-table col.rmt-col-notes {
+  width: 7%;
+}
+
+.report-morning-topic-table col.rmt-col-tasks {
+  width: 9%;
+}
+
+.report-morning-topic-table col.rmt-col-actions {
+  width: 11%;
+}
+
+.report-morning-topic-table thead th:nth-child(4) {
+  border-right: 1px solid var(--border);
+  padding-right: 12px;
+}
+
+.report-morning-topic-table thead th:nth-child(5) {
+  padding-left: 12px;
+}
+
+.report-morning-topic-td-discuss-date {
+  border-right: 1px solid var(--border);
+  padding-right: 12px !important;
+  min-width: 6.75rem;
+  box-sizing: border-box;
+}
+
+.report-morning-topic-td-created-date {
+  padding-left: 12px !important;
+  min-width: 6.75rem;
+  box-sizing: border-box;
+}
+
+.report-morning-topic-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.report-morning-topic-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.report-morning-topic-table th,
+.report-morning-topic-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 7px;
+  vertical-align: top;
+  text-align: left;
+}
+
+.report-morning-topic-table th {
+  background: #f8fafc;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.report-morning-topic-desc {
+  max-width: 280px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.report-morning-topic-actions {
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.report-morning-topic-actions .tiny-btn {
+  padding: 3px 6px;
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.report-morning-topic-modal.modal {
+  width: min(560px, 100%);
 }
 
 /* 顶部设置：大模型 Key + 部门架构 */
@@ -6995,13 +7473,21 @@ button.app-config-md-download.linkish {
   display: grid;
   grid-template-columns: 1fr;
   gap: 16px;
-  align-items: start;
+  /* 与右侧同高拉伸，避免侧栏卡片较矮时左侧露出页面底色形成「横向断层」 */
+  align-items: stretch;
 }
 
 @media (min-width: 900px) {
   .data-sync-layout {
     grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   }
+}
+
+.data-sync-sidebar.card {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  box-sizing: border-box;
 }
 
 .data-sync-sidebar {
@@ -7110,7 +7596,11 @@ button.app-config-md-download.linkish {
   min-width: 0;
   max-height: calc(100vh - 200px);
   overflow-y: auto;
-  padding-right: 4px;
+  padding: 4px 10px 16px 14px;
+  box-sizing: border-box;
+  /* 与侧栏同为 surface，避免透明底露出页面灰底造成上下色块不一致 */
+  background: var(--surface);
+  border-radius: var(--radius);
 }
 
 /* 接口基础配置：双栏压缩纵向滚动 */
@@ -7374,6 +7864,51 @@ button.app-config-md-download.linkish {
   margin: 0;
 }
 
+.data-sync-cleaning-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  margin-bottom: 12px;
+}
+
+.data-sync-cleaning-mode-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.data-sync-cleaning-mode-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.data-sync-script-cleaning-block {
+  margin-top: 4px;
+}
+
+.data-sync-script-cleaning-block code {
+  font-size: 0.78rem;
+}
+
+.data-sync-script-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px 14px;
+  margin-top: 10px;
+}
+
+.data-sync-script-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
 .data-sync-custom-output {
   margin-top: 8px;
 }
@@ -7428,21 +7963,30 @@ button.app-config-md-download.linkish {
 
 .data-sync-field-checkboxes {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 220px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px 10px;
+  max-height: min(320px, 42vh);
   overflow: auto;
-  padding: 8px 10px;
+  padding: 10px 12px;
   background: #f8fafc;
   border: 1px solid var(--border);
   border-radius: 8px;
 }
 
 .data-sync-field-picker-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: min(280px, 100%);
+  padding: 4px 10px 4px 6px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-sizing: border-box;
 }
 
 .data-sync-field-drag-handle {
@@ -7474,7 +8018,7 @@ button.app-config-md-download.linkish {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: min(240px, 100%);
+  max-width: min(200px, 100%);
 }
 
 .data-sync-business-toolbar {
@@ -7562,9 +8106,7 @@ button.app-config-md-download.linkish {
 
 .data-sync-cell-preview {
   display: block;
-  max-width: 320px;
-  max-height: 120px;
-  overflow: auto;
+  max-width: 100%;
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.4;
@@ -7580,6 +8122,8 @@ button.app-config-md-download.linkish {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
   max-height: min(65vh, 600px);
   overflow: auto;
 }
