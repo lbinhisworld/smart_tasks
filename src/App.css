@@ -3900,13 +3900,333 @@ button.app-config-md-download.linkish {
   gap: 16px;
 }
 
+.sales-forecast-data-prep-above-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+
+.sales-forecast-data-prep-above-tabs .sales-forecast-upload-row {
+  margin-top: 0;
+}
+
 .sales-forecast-main-card .sales-forecast-view-tabs {
-  margin-top: 6px;
+  margin-top: 0;
   margin-bottom: 0;
 }
 
 .sales-forecast-tab-panel {
   padding: 12px 0 4px;
+}
+
+.sales-forecast-tab-panel--user {
+  padding-top: 8px;
+}
+
+.sales-forecast-tab-panel--debug .sales-data-preview-card {
+  margin-bottom: 1.25rem;
+}
+
+.sales-forecast-user-mode-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 20px;
+  align-items: start;
+  min-height: 260px;
+}
+
+@media (max-width: 900px) {
+  .sales-forecast-user-mode-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sales-forecast-user-mode-progress,
+.sales-forecast-user-mode-results {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.72);
+  min-height: 200px;
+  min-width: 0;
+}
+
+.sales-forecast-user-mode-progress {
+  display: flex;
+  flex-direction: column;
+  min-height: 320px;
+}
+
+.sales-forecast-user-mode-panel-title {
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.sales-forecast-progress-feed-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.sales-forecast-progress-feed-head .sales-forecast-user-mode-panel-title {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.sales-forecast-progress-feed-live {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+}
+
+.sales-forecast-progress-feed {
+  --sf-feed-gap: 10px;
+  --sf-feed-bubble-block: calc(0.9rem * 1.45 + 20px);
+  --sf-feed-line-count: 10;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  max-height: min(
+    55vh,
+    calc(
+      var(--sf-feed-line-count) * var(--sf-feed-bubble-block) + (var(--sf-feed-line-count) - 1) *
+        var(--sf-feed-gap) + 8px
+    )
+  );
+  padding: 10px 8px 12px;
+  border-radius: 10px;
+  background: rgba(246, 248, 251, 0.85);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.sales-forecast-progress-feed--drawer {
+  margin-top: 0;
+  flex: 1 1 auto;
+  max-height: min(
+    calc(100vh - 9.5rem),
+    calc(
+      var(--sf-feed-line-count) * var(--sf-feed-bubble-block) + (var(--sf-feed-line-count) - 1) *
+        var(--sf-feed-gap) + 8px
+    )
+  );
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.sales-forecast-auto-drawer-bubble.home-ai-chat-bubble--assistant {
+  background: rgba(139, 92, 246, 0.22);
+  border-color: rgba(167, 139, 250, 0.45);
+  color: #f5f3ff;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+.sales-forecast-auto-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 20000;
+  pointer-events: none;
+  isolation: isolate;
+}
+
+.sales-forecast-auto-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  border: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(15, 23, 42, 0.35);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.sales-forecast-auto-drawer-panel {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: min(420px, 92vw);
+  max-width: 100%;
+  pointer-events: auto;
+  box-shadow: 8px 0 32px rgba(76, 29, 149, 0.35);
+  transform: translateX(0);
+  animation: sales-forecast-auto-drawer-slide-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes sales-forecast-auto-drawer-slide-in {
+  from {
+    transform: translateX(-105%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.sales-forecast-auto-drawer-chrome {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 16px 20px;
+  background: linear-gradient(
+    165deg,
+    rgba(88, 28, 135, 0.52) 0%,
+    rgba(67, 56, 202, 0.45) 48%,
+    rgba(109, 40, 217, 0.5) 100%
+  );
+  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  border-right: 1px solid rgba(216, 180, 254, 0.35);
+}
+
+.sales-forecast-auto-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+
+.sales-forecast-auto-drawer-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #faf5ff;
+  letter-spacing: 0.02em;
+  line-height: 1.35;
+}
+
+.sales-forecast-auto-drawer-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sales-forecast-auto-drawer-live {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #e9d5ff;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.sales-forecast-auto-drawer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.1);
+  color: #faf5ff;
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sales-forecast-auto-drawer-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.sales-forecast-auto-drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sales-forecast-progress-feed-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--sf-feed-gap);
+  overflow: hidden;
+}
+
+.sales-forecast-progress-feed-line {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: none;
+  align-self: stretch;
+  transition: opacity 0.38s ease, transform 0.38s ease;
+}
+
+.sales-forecast-progress-feed-line--exiting {
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+}
+
+.sales-forecast-progress-feed-line--entering {
+  animation: sales-forecast-progress-feed-enter 0.38s ease forwards;
+}
+
+@keyframes sales-forecast-progress-feed-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sales-forecast-user-mode-results-empty {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.sales-forecast-user-mode-results-body {
+  font-size: 0.88rem;
+}
+
+.sales-forecast-user-mode-dl {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sales-forecast-user-mode-dl > div {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: baseline;
+}
+
+.sales-forecast-user-mode-dl dt {
+  margin: 0;
+  font-weight: 500;
+  color: #64748b;
+  font-size: 0.82rem;
+}
+
+.sales-forecast-user-mode-dl dd {
+  margin: 0;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
 }
 
 .sales-forecast-tab-panel--debug {
@@ -3916,17 +4236,94 @@ button.app-config-md-download.linkish {
   padding-top: 6px;
 }
 
-.sales-forecast-user-mode-hint {
-  margin: 0;
-  padding: 4px 0 8px;
-}
-
 .sales-forecast-upload-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   margin-top: 4px;
+}
+
+.sales-forecast-auto-predict-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+
+.sales-forecast-auto-predict-progress-card {
+  width: 100%;
+  align-self: stretch;
+  border-radius: 12px;
+  border: 1px solid rgba(167, 139, 250, 0.5);
+  background: linear-gradient(
+    165deg,
+    rgba(237, 233, 254, 0.95) 0%,
+    rgba(221, 214, 254, 0.88) 42%,
+    rgba(233, 213, 255, 0.92) 100%
+  );
+  box-shadow: 0 4px 24px rgba(91, 33, 182, 0.12);
+  padding: 16px 18px;
+}
+
+.sales-forecast-auto-predict-progress-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(109, 40, 217, 0.18);
+}
+
+.sales-forecast-auto-predict-progress-card-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #5b21b6;
+  letter-spacing: 0.02em;
+}
+
+.sales-forecast-auto-predict-progress-card-badge {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #6d28d9;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(139, 92, 246, 0.22);
+  border: 1px solid rgba(139, 92, 246, 0.4);
+}
+
+.sales-forecast-auto-predict-progress-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.sales-forecast-auto-predict-progress-card-primary {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.55;
+  color: #4c1d95;
+}
+
+.sales-forecast-auto-predict-progress-card-detail {
+  margin: 10px 0 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: #6d28d9;
+  font-variant-numeric: tabular-nums;
+}
+
+.sales-forecast-auto-predict-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sales-forecast-auto-predict-btn .sales-forecast-robot-icon {
+  flex-shrink: 0;
+  opacity: 0.95;
 }
 
 .sales-forecast-file-label {

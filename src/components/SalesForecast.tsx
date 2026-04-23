@@ -1,5 +1,5 @@
 /**
- * @fileoverview 销售预测：主卡片下「用户显示模式 / 调试显示模式」双 Tab；CSV、底表与客户进货周期性分析等均在调试 Tab。
+ * @fileoverview 销售预测：主卡片上方为 CSV 与原始预览；其下为单一工作区（底表、进货树、模式挖掘等）。
  *
  * @module SalesForecast
  */
@@ -14,7 +14,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import {
   calculateOrderSegments,
   classifyOrderQuantityLabel,
@@ -73,12 +73,60 @@ import {
   type SalesAnalysisBaseRow,
 } from "../utils/salesAnalysisBaseFromPreview";
 import {
+  clearSalesForecastPersisted,
   loadSalesForecastPersisted,
-  readSalesForecastViewTab,
   saveSalesForecastPersisted,
-  writeSalesForecastViewTab,
 } from "../utils/salesForecastStorage";
 import { CustomerDimLabelIcon } from "./CustomerDimLabelIcon";
+
+/** 设为 false 可关闭「自动预测」按钮与串联流程的 console 诊断日志 */
+const SF_AUTOPREDICT_DEBUG_LOG = true;
+
+function sfAutoPredictLog(...args: unknown[]) {
+  if (SF_AUTOPREDICT_DEBUG_LOG) console.log("[SalesForecast:AutoPredict]", ...args);
+}
+
+type ProgressPair = { current: number; total: number } | null;
+
+/** 自动预测进行中时，客户进货周期性分析区四步与按钮一致的细进度（current/total） */
+function autoPredictCustomerInboundDetailLine(
+  autoPredictBusy: boolean,
+  orderCountComputeBusy: boolean,
+  orderCountProgress: ProgressPair,
+  orderIntervalStdDevComputeBusy: boolean,
+  orderIntervalStdDevProgress: ProgressPair,
+  orderIntervalMeanComputeBusy: boolean,
+  orderIntervalMeanProgress: ProgressPair,
+  periodicityLabelsComputeBusy: boolean,
+  periodicityLabelsProgress: ProgressPair,
+): string | null {
+  if (!autoPredictBusy) return null;
+  if (orderCountComputeBusy) {
+    if (orderCountProgress && orderCountProgress.total > 0) {
+      return `计算下单次数进度 ${orderCountProgress.current} / ${orderCountProgress.total}`;
+    }
+    return "计算下单次数：计算中…";
+  }
+  if (orderIntervalStdDevComputeBusy) {
+    if (orderIntervalStdDevProgress && orderIntervalStdDevProgress.total > 0) {
+      return `计算订货间隔标准差进度 ${orderIntervalStdDevProgress.current} / ${orderIntervalStdDevProgress.total}`;
+    }
+    return "计算订货间隔标准差：计算中…";
+  }
+  if (orderIntervalMeanComputeBusy) {
+    if (orderIntervalMeanProgress && orderIntervalMeanProgress.total > 0) {
+      return `计算订货间隔平均值进度 ${orderIntervalMeanProgress.current} / ${orderIntervalMeanProgress.total}`;
+    }
+    return "计算订货间隔平均值：计算中…";
+  }
+  if (periodicityLabelsComputeBusy) {
+    if (periodicityLabelsProgress && periodicityLabelsProgress.total > 0) {
+      return `生成周期性标签进度 ${periodicityLabelsProgress.current} / ${periodicityLabelsProgress.total}`;
+    }
+    return "生成周期性标签：计算中…";
+  }
+  return null;
+}
 
 function inboundPatternListSignatureFromItems(patterns: InboundPeriodicityPatternItem[]): string {
   return patterns
@@ -95,6 +143,38 @@ function splitInboundPatternsStrongWeak(all: InboundPeriodicityPatternItem[]) {
     else if (first === "弱周期性") weak.push(p);
   }
   return { strong, weak };
+}
+
+function yieldToPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+/** 自动预测串联分步：等待某条件为真（通常表示对应 busy 已结束） */
+function waitForCondition(
+  predicate: () => boolean,
+  options?: { timeoutMs?: number; label?: string },
+): Promise<void> {
+  const timeoutMs = options?.timeoutMs ?? 600_000;
+  const label = options?.label ?? "等待";
+  return new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    const tick = () => {
+      if (predicate()) {
+        resolve();
+        return;
+      }
+      if (Date.now() - t0 > timeoutMs) {
+        reject(new Error(`${label} 超时（${timeoutMs}ms）`));
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
 }
 
 function hydrateInboundNextQtyPredictionsFromStored(
@@ -117,6 +197,25 @@ function hydrateInboundNextQtyPredictionsFromStored(
   const weakPred =
     stored.weakPatternNextQtyListSignature === sigWeak ? stored.weakPatternNextQtyPredictions : {};
   return { strong: strongPred, weak: weakPred };
+}
+
+/** 销售预测「自动预测」按钮前的机器人图标 */
+function SalesForecastRobotIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      className="sales-forecast-robot-icon"
+      aria-hidden
+    >
+      <path
+        fill="currentColor"
+        d="M12 2a2 2 0 0 1 2 2v1h3a2 2 0 0 1 2 2v2h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h1V7a2 2 0 0 1 2-2h3V4a2 2 0 0 1 2-2zm-1 4H9V5a1 1 0 1 0 2 0v1zm4 0h-2V5a1 1 0 1 1 2 0v1zm-7 3H6v2h12V9H8zm-2 4v6h12v-6H6zm3 2.25a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zm6 0a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5z"
+      />
+    </svg>
+  );
 }
 
 const CSV_ACCEPT = ".csv,text/csv";
@@ -865,20 +964,6 @@ function readInitialSalesForecastState(): {
   };
 }
 
-function resolveInitialForecastViewTab(
-  persisted: ReturnType<typeof readInitialSalesForecastState>,
-): "user" | "debug" {
-  const fromStorage = readSalesForecastViewTab();
-  if (fromStorage) return fromStorage;
-  if (
-    persisted.analysisBase ||
-    (persisted.customerInboundDimension && persisted.customerInboundDimension.length > 0)
-  ) {
-    return "debug";
-  }
-  return "user";
-}
-
 export type SalesForecastProps = {
   /** 为 true 时表示当前路由在销售预测页；切回本页时从 localStorage 再同步，避免刷新或异常丢状态 */
   active?: boolean;
@@ -893,6 +978,51 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 自动预测：读入 CSV 并同步跑完底表至周期性标签与强/弱量预测 */
+  const [autoPredictBusy, setAutoPredictBusy] = useState(false);
+  const [autoPredictProgressText, setAutoPredictProgressText] = useState<string | null>(null);
+
+  type AutoPredictStepActions = {
+    genSegments: () => void;
+    genDimension: () => void;
+    orderCounts: () => void;
+    orderStd: () => void;
+    orderMean: () => void;
+    periodicity: () => void;
+    strongQty: () => void;
+    weakQty: () => void;
+  };
+
+  type AutoPredictBusySnap = {
+    orderSegmentsBusy: boolean;
+    customerDimensionBusy: boolean;
+    orderCountComputeBusy: boolean;
+    orderIntervalStdDevComputeBusy: boolean;
+    orderIntervalMeanComputeBusy: boolean;
+    periodicityLabelsComputeBusy: boolean;
+  };
+
+  const autoPredictStepActionsRef = useRef<AutoPredictStepActions>({
+    genSegments: () => {},
+    genDimension: () => {},
+    orderCounts: () => {},
+    orderStd: () => {},
+    orderMean: () => {},
+    periodicity: () => {},
+    strongQty: () => {},
+    weakQty: () => {},
+  });
+
+  const autoPredictBusySnapRef = useRef<AutoPredictBusySnap>({
+    orderSegmentsBusy: false,
+    customerDimensionBusy: false,
+    orderCountComputeBusy: false,
+    orderIntervalStdDevComputeBusy: false,
+    orderIntervalMeanComputeBusy: false,
+    periodicityLabelsComputeBusy: false,
+  });
+
+  const autoPredictErrorSnapRef = useRef<string | null>(null);
   const [analysisBase, setAnalysisBase] = useState<{
     rows: SalesAnalysisBaseRow[];
     missingHint: string | null;
@@ -972,10 +1102,9 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
   const [hideIrregularPatterns, setHideIrregularPatterns] = useState(
     () => readInitialSalesForecastState().periodicityLabelsComputeCompleted,
   );
-  const [forecastViewTab, setForecastViewTab] = useState<"user" | "debug">(() =>
-    resolveInitialForecastViewTab(initialPersisted),
-  );
   const prevActiveRef = useRef<boolean | null>(null);
+  /** 已移除 Tab UI，固定为调试工作区；保留标识避免遗留 JSX/合并冲突引用未定义变量 */
+  const forecastViewTab = "debug" as const;
 
   /** 从其他页签切回销售预测时，用已持久化的预览 / 底表 / 数量分类 / 客户进货周期性分析 覆盖本地 state（与 save 写入一致） */
   useEffect(() => {
@@ -994,12 +1123,6 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
       setOpenCustomerDimIds(new Set(stored.customerInboundDimension.map((r) => r.customerName)));
     } else {
       setOpenCustomerDimIds(new Set());
-    }
-    const tabPref = readSalesForecastViewTab();
-    if (tabPref) {
-      setForecastViewTab(tabPref);
-    } else if (stored.analysisBase || (stored.customerInboundDimension?.length ?? 0) > 0) {
-      setForecastViewTab("debug");
     }
     setOrderCountComputeSuccess(stored.orderCountComputeCompleted);
     setOrderIntervalStdDevComputeSuccess(stored.orderIntervalStdDevComputeCompleted);
@@ -1049,7 +1172,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     setPickedFile(f);
   }, []);
 
-  const onSave = useCallback(() => {
+  const onStepwiseParse = useCallback(() => {
     setError(null);
     if (!pickedFile) {
       setError("请先选择 CSV 文件。");
@@ -1126,6 +1249,366 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     };
     reader.readAsArrayBuffer(pickedFile);
   }, [pickedFile]);
+
+  const onAutoPredict = useCallback(() => {
+    setError(null);
+    const sourceFile = pickedFile;
+    const previewSource = preview;
+
+    sfAutoPredictLog("onAutoPredict invoked", {
+      pickedFile: sourceFile?.name ?? null,
+      pickedFileRef: sourceFile ? `${sourceFile.size} bytes` : null,
+      previewFileName: previewSource?.fileName ?? null,
+      previewRowCount: previewSource?.rows?.length ?? 0,
+      busy,
+      autoPredictBusy,
+      active,
+    });
+
+    const canRunFromFile = sourceFile != null;
+    const canRunFromPersistedPreview =
+      !canRunFromFile && previewSource != null && previewSource.rows.length > 0;
+
+    if (!canRunFromFile && !canRunFromPersistedPreview) {
+      setError("请先选择 CSV 文件；若已有上次载入的预览数据，也可直接点自动预测。");
+      sfAutoPredictLog(
+        "abort: no runnable source（需要选择文件，或本地存在至少一行预览数据）",
+      );
+      return;
+    }
+    if (busy || autoPredictBusy) {
+      sfAutoPredictLog("abort: already busy", { busy, autoPredictBusy });
+      return;
+    }
+    flushSync(() => {
+      clearSalesForecastPersisted();
+      setPreview(null);
+      setAnalysisBase(null);
+      setOrderSegments(null);
+      setCustomerInboundDimension(null);
+      setOrderCountComputeSuccess(false);
+      setOrderIntervalStdDevComputeSuccess(false);
+      setOrderIntervalMeanComputeSuccess(false);
+      setPeriodicityLabelsComputeSuccess(false);
+      setHideIrregularPatterns(false);
+      setStrongPatternNextQtyPredictions({});
+      setWeakPatternNextQtyPredictions({});
+      setOpenCustomerDimIds(new Set());
+      setPreviewCollapsed(false);
+      setOrderCountProgress(null);
+      setOrderIntervalStdDevProgress(null);
+      setOrderIntervalMeanProgress(null);
+      setPeriodicityLabelsProgress(null);
+      prevStrongPatternListSigRef.current = null;
+      prevWeakPatternListSigRef.current = null;
+      autoPredictErrorSnapRef.current = null;
+      setAutoPredictProgressText(null);
+      setOrderSegmentsBusy(false);
+      setCustomerDimensionBusy(false);
+      setOrderCountComputeBusy(false);
+      setOrderIntervalStdDevComputeBusy(false);
+      setOrderIntervalMeanComputeBusy(false);
+      setPeriodicityLabelsComputeBusy(false);
+      orderCountInflightRef.current = false;
+      orderIntervalStdDevInflightRef.current = false;
+      orderIntervalMeanInflightRef.current = false;
+      periodicityLabelsInflightRef.current = false;
+    });
+    sfAutoPredictLog(
+      "cleared sales forecast panel + localStorage; setAutoPredictBusy(true), starting pipeline",
+    );
+    setAutoPredictBusy(true);
+
+    const startAutoPredictPipeline = async (
+      nextPreview: { headers: string[]; rows: string[][]; fileName: string },
+      dataRowCount: number,
+    ) => {
+      const log = (msg: string) => {
+        sfAutoPredictLog("pipeline", msg);
+      };
+      const showAutoPredictStep = (label: string) => {
+        flushSync(() => {
+          setAutoPredictProgressText(`正在执行【${label}】`);
+        });
+      };
+      try {
+        const { rows, missingSourceLabels } = buildSalesAnalysisBaseFromPreview(
+          nextPreview.headers,
+          nextPreview.rows,
+        );
+        const nextAnalysis = {
+          rows,
+          missingHint:
+            missingSourceLabels.length > 0
+              ? `以下列未在表头中找到对应源字段，单元格将为空：${missingSourceLabels.join("；")}`
+              : null,
+        };
+        const quantities = nextAnalysis.rows.map((r) => r.quantity);
+        const { fragmented_limit: fl, high_limit: hl } = calculateOrderSegments(quantities).thresholds;
+
+        flushSync(() => {
+          setPreview(nextPreview);
+          setPreviewCollapsed(false);
+          setAnalysisBase(null);
+          setOrderSegments(null);
+          setCustomerInboundDimension(null);
+          setOrderCountComputeSuccess(false);
+          setOrderIntervalStdDevComputeSuccess(false);
+          setOrderIntervalMeanComputeSuccess(false);
+          setPeriodicityLabelsComputeSuccess(false);
+          setHideIrregularPatterns(false);
+          setStrongPatternNextQtyPredictions({});
+          setWeakPatternNextQtyPredictions({});
+          setOpenCustomerDimIds(new Set());
+        });
+        log(`· 预览已载入：${nextPreview.fileName}，共 ${dataRowCount} 行数据（不含表头）。`);
+        await yieldToPaint();
+
+        if (fl === 0 && hl === 0) {
+          flushSync(() => {
+            setAnalysisBase(nextAnalysis);
+            setOrderSegments(null);
+            setCustomerInboundDimension(null);
+            setOrderCountComputeSuccess(false);
+            setOrderIntervalStdDevComputeSuccess(false);
+            setOrderIntervalMeanComputeSuccess(false);
+            setPeriodicityLabelsComputeSuccess(false);
+            setHideIrregularPatterns(false);
+            setStrongPatternNextQtyPredictions({});
+            setWeakPatternNextQtyPredictions({});
+            setOpenCustomerDimIds(new Set());
+          });
+          void saveSalesForecastPersisted(nextPreview, nextAnalysis, null, null, {
+            orderCountComputeCompleted: false,
+            orderIntervalStdDevComputeCompleted: false,
+            orderIntervalMeanComputeCompleted: false,
+            periodicityLabelsComputeCompleted: false,
+            clearInboundPatternNextQtyPredictions: true,
+          });
+          log("· 数量列中没有可用的正数，无法生成分类阈值。自动预测中止。");
+          setError("数量列中没有可用的正数，无法生成分类阈值。");
+          sfAutoPredictLog("abort: no positive quantities for segment thresholds (fl/hl both 0)");
+          return;
+        }
+
+        const throwIfAutoPredictError = () => {
+          const e = autoPredictErrorSnapRef.current;
+          if (e) throw new Error(e);
+        };
+
+        log("· 步骤 1/9：拆解物料记录（同「拆解物料记录」）…");
+        showAutoPredictStep("拆解物料记录");
+        flushSync(() => {
+          setAnalysisBase(nextAnalysis);
+          setOrderSegments(null);
+          setOrderCountComputeSuccess(false);
+          setOrderIntervalStdDevComputeSuccess(false);
+          setOrderIntervalMeanComputeSuccess(false);
+          setPeriodicityLabelsComputeSuccess(false);
+          setHideIrregularPatterns(false);
+          setCustomerInboundDimension(null);
+          setOpenCustomerDimIds(new Set());
+          setPreviewCollapsed(true);
+          setStrongPatternNextQtyPredictions({});
+          setWeakPatternNextQtyPredictions({});
+        });
+        if (
+          !saveSalesForecastPersisted(nextPreview, nextAnalysis, null, null, {
+            orderCountComputeCompleted: false,
+            orderIntervalStdDevComputeCompleted: false,
+            orderIntervalMeanComputeCompleted: false,
+            periodicityLabelsComputeCompleted: false,
+            clearInboundPatternNextQtyPredictions: true,
+          })
+        ) {
+          setError("底表已生成，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复底表。");
+        }
+        await yieldToPaint();
+        throwIfAutoPredictError();
+
+        log("· 步骤 2/9：生成数量分类…");
+        showAutoPredictStep("生成数量分类");
+        autoPredictStepActionsRef.current.genSegments();
+        await waitForCondition(() => !autoPredictBusySnapRef.current.orderSegmentsBusy, {
+          label: "生成数量分类",
+        });
+        throwIfAutoPredictError();
+
+        log("· 步骤 3/9：启动进货周期性分析…");
+        showAutoPredictStep("启动进货周期性分析");
+        autoPredictStepActionsRef.current.genDimension();
+        await waitForCondition(() => !autoPredictBusySnapRef.current.customerDimensionBusy, {
+          label: "启动进货周期性分析",
+        });
+        throwIfAutoPredictError();
+
+        log("· 步骤 4/9：计算下单次数…");
+        showAutoPredictStep("计算下单次数");
+        autoPredictStepActionsRef.current.orderCounts();
+        await waitForCondition(() => !autoPredictBusySnapRef.current.orderCountComputeBusy, {
+          label: "计算下单次数",
+        });
+        throwIfAutoPredictError();
+
+        log("· 步骤 5/9：计算订货间隔标准差…");
+        showAutoPredictStep("计算订货间隔标准差");
+        autoPredictStepActionsRef.current.orderStd();
+        await waitForCondition(() => !autoPredictBusySnapRef.current.orderIntervalStdDevComputeBusy, {
+          label: "计算订货间隔标准差",
+        });
+        throwIfAutoPredictError();
+
+        log("· 步骤 6/9：计算订货间隔平均值…");
+        showAutoPredictStep("计算订货间隔平均值");
+        autoPredictStepActionsRef.current.orderMean();
+        await waitForCondition(() => !autoPredictBusySnapRef.current.orderIntervalMeanComputeBusy, {
+          label: "计算订货间隔平均值",
+        });
+        throwIfAutoPredictError();
+
+        log("· 步骤 7/9：生成周期性标签…");
+        showAutoPredictStep("生成周期性标签");
+        autoPredictStepActionsRef.current.periodicity();
+        await waitForCondition(() => !autoPredictBusySnapRef.current.periodicityLabelsComputeBusy, {
+          label: "生成周期性标签",
+        });
+        throwIfAutoPredictError();
+
+        await yieldToPaint();
+        await yieldToPaint();
+
+        log("· 步骤 8/9：强进货周期模式 → 预测下一次下单量…");
+        showAutoPredictStep("强进货周期模式 → 预测下一次下单量");
+        autoPredictStepActionsRef.current.strongQty();
+        await yieldToPaint();
+        throwIfAutoPredictError();
+
+        log("· 步骤 9/9：弱进货周期模式 → 预测下一次下单量…");
+        showAutoPredictStep("弱进货周期模式 → 预测下一次下单量");
+        autoPredictStepActionsRef.current.weakQty();
+        await yieldToPaint();
+        throwIfAutoPredictError();
+
+        log("· 自动预测已全部完成（顺序与界面按钮一致，上一步结束后再执行下一步）。");
+        sfAutoPredictLog("pipeline finished successfully");
+      } catch (err) {
+        setPreview(null);
+        setAnalysisBase(null);
+        setPreviewCollapsed(false);
+        const msg = err instanceof Error ? err.message : "自动预测解析失败。";
+        setError(msg);
+        log(`· 自动预测失败：${msg}`);
+        sfAutoPredictLog("pipeline error", err);
+      } finally {
+        sfAutoPredictLog("finally: clearing autoPredictBusy / progress text");
+        setAutoPredictProgressText(null);
+        setAutoPredictBusy(false);
+      }
+    };
+
+    if (canRunFromFile) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        sfAutoPredictLog("FileReader.onload fired", {
+          resultType: reader.result == null ? "null" : typeof reader.result,
+        });
+        void (async () => {
+          const log = (msg: string) => {
+            sfAutoPredictLog("pipeline", msg);
+          };
+          const abortFilePath = () => {
+            setAutoPredictProgressText(null);
+            setAutoPredictBusy(false);
+          };
+          try {
+            const buf = reader.result;
+            if (!(buf instanceof ArrayBuffer)) {
+              sfAutoPredictLog("abort in onload: result is not ArrayBuffer", {
+                actual: reader.result == null ? "null" : typeof reader.result,
+              });
+              setPreview(null);
+              setAnalysisBase(null);
+              setPreviewCollapsed(false);
+              setError("读取结果异常。");
+              log("· 读取失败：结果类型异常。");
+              abortFilePath();
+              return;
+            }
+            const text = decodeTextBytesAuto(buf);
+            const matrix = parseCsvText(text);
+            if (matrix.length === 0) {
+              sfAutoPredictLog("abort in onload: empty matrix after CSV parse");
+              setPreview(null);
+              setAnalysisBase(null);
+              setPreviewCollapsed(false);
+              setError("文件中没有可解析的数据行。");
+              log("· 解析失败：文件中没有可解析的数据行。");
+              abortFilePath();
+              return;
+            }
+            const headers = matrix[0]!.map((h, i) => (h.trim() !== "" ? h.trim() : `列${i + 1}`));
+            const body = matrix.slice(1);
+            const width = headers.length;
+            const normalized = body.map((row) => {
+              const next = [...row];
+              while (next.length < width) next.push("");
+              if (next.length > width) return next.slice(0, width);
+              return next;
+            });
+            const customerCol = findSalesCustomerSourceColumnIndex(headers);
+            const rowsForPreview =
+              customerCol >= 0
+                ? normalized.map((row) => {
+                    const next = [...row];
+                    next[customerCol] = formatCustomerPreviewName(next[customerCol] ?? "");
+                    return next;
+                  })
+                : normalized;
+            const nextPreview = { headers, rows: rowsForPreview, fileName: sourceFile!.name };
+            await startAutoPredictPipeline(nextPreview, body.length);
+          } catch (err) {
+            sfAutoPredictLog("FileReader path: unexpected error before/during pipeline", err);
+            setPreview(null);
+            setAnalysisBase(null);
+            setPreviewCollapsed(false);
+            setError(err instanceof Error ? err.message : "自动预测解析失败。");
+            setAutoPredictProgressText(null);
+            setAutoPredictBusy(false);
+          }
+        })();
+      };
+      reader.onerror = () => {
+        sfAutoPredictLog("FileReader.onerror", { error: reader.error?.message ?? String(reader.error) });
+        setAutoPredictProgressText(null);
+        setAutoPredictBusy(false);
+        setPreview(null);
+        setAnalysisBase(null);
+        setPreviewCollapsed(false);
+        setError("读取文件失败。");
+        sfAutoPredictLog("pipeline", "· 读取文件失败。");
+      };
+      sfAutoPredictLog("FileReader.readAsArrayBuffer", {
+        name: sourceFile!.name,
+        size: sourceFile!.size,
+      });
+      reader.readAsArrayBuffer(sourceFile!);
+    } else {
+      sfAutoPredictLog("running auto predict from in-memory preview (no File handle)", {
+        fileName: previewSource!.fileName,
+        rowCount: previewSource!.rows.length,
+      });
+      const nextPreview = {
+        headers: previewSource!.headers,
+        rows: previewSource!.rows.map((row) => [...row]),
+        fileName: previewSource!.fileName,
+      };
+      void startAutoPredictPipeline(nextPreview, nextPreview.rows.length).catch((e) => {
+        sfAutoPredictLog("async pipeline: uncaught rejection (outside try/catch)", e);
+        setAutoPredictProgressText(null);
+        setAutoPredictBusy(false);
+      });
+    }
+  }, [pickedFile, preview, busy, autoPredictBusy, active]);
 
   const onDisassembleMaterial = useCallback(() => {
     if (!preview) return;
@@ -1685,14 +2168,60 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     }
   }, [inboundPatternsWeak, preview, analysisBase, orderSegments, customerInboundDimension]);
 
+  autoPredictBusySnapRef.current = {
+    orderSegmentsBusy,
+    customerDimensionBusy,
+    orderCountComputeBusy,
+    orderIntervalStdDevComputeBusy,
+    orderIntervalMeanComputeBusy,
+    periodicityLabelsComputeBusy,
+  };
+  autoPredictErrorSnapRef.current = error;
+  autoPredictStepActionsRef.current = {
+    genSegments: onGenerateOrderSegments,
+    genDimension: onGenerateCustomerDimension,
+    orderCounts: onComputeOrderCounts,
+    orderStd: onComputeOrderIntervalStdDev,
+    orderMean: onComputeOrderIntervalMean,
+    periodicity: onGeneratePeriodicityLabels,
+    strongQty: runStrongNextQtyPrediction,
+    weakQty: runWeakNextQtyPrediction,
+  };
+
+  const autoPredictInboundDetailLine = useMemo(
+    () =>
+      autoPredictCustomerInboundDetailLine(
+        autoPredictBusy,
+        orderCountComputeBusy,
+        orderCountProgress,
+        orderIntervalStdDevComputeBusy,
+        orderIntervalStdDevProgress,
+        orderIntervalMeanComputeBusy,
+        orderIntervalMeanProgress,
+        periodicityLabelsComputeBusy,
+        periodicityLabelsProgress,
+      ),
+    [
+      autoPredictBusy,
+      orderCountComputeBusy,
+      orderCountProgress,
+      orderIntervalStdDevComputeBusy,
+      orderIntervalStdDevProgress,
+      orderIntervalMeanComputeBusy,
+      orderIntervalMeanProgress,
+      periodicityLabelsComputeBusy,
+      periodicityLabelsProgress,
+    ],
+  );
+
   return (
-    <div className="sales-forecast-page">
+    <div className="sales-forecast-page" data-forecast-view-tab={forecastViewTab}>
       <section className="card sales-forecast-main-card">
         <div className="card-head">
           <div>
             <h2>销售预测</h2>
             <p className="muted small">
-              上传销售数据 CSV，点击保存后可在下方预览表格。首行将作为表头；支持双引号包裹含逗号的字段。
+              上传销售数据 CSV，使用「分步解析」仅载入预览；「自动预测」将切换至调试模式并依次完成底表、分类、进货树、间隔统计、周期性标签与强/弱周期量预测。首行将作为表头；支持双引号包裹含逗号的字段。
               <span className="sales-forecast-encoding-hint">
                 编码：自动识别 UTF-8 与 Excel 常见的 GBK/GB18030，避免中文乱码。
               </span>
@@ -1700,136 +2229,159 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
           </div>
         </div>
 
-        <div
-          className="report-main-tabs sales-forecast-view-tabs"
-          role="tablist"
-          aria-label="销售预测视图"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={forecastViewTab === "user"}
-            className={`report-main-tab${forecastViewTab === "user" ? " is-active" : ""}`}
-            onClick={() => {
-            setForecastViewTab("user");
-            writeSalesForecastViewTab("user");
-          }}
-          >
-            用户显示模式
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={forecastViewTab === "debug"}
-            className={`report-main-tab${forecastViewTab === "debug" ? " is-active" : ""}`}
-            onClick={() => {
-            setForecastViewTab("debug");
-            writeSalesForecastViewTab("debug");
-          }}
-          >
-            调试显示模式
-          </button>
+        <div className="sales-forecast-data-prep-above-tabs">
+          <div className="sales-forecast-upload-row">
+            <input
+              id={uploadId}
+              type="file"
+              className="sr-only"
+              accept={CSV_ACCEPT}
+              onChange={onPickFile}
+            />
+            <label htmlFor={uploadId} className="upload-label sales-forecast-file-label">
+              <span className="upload-btn">选择 CSV 文件</span>
+              <span className="muted tiny">
+                {pickedFile?.name ?? preview?.fileName ?? "未选择文件"}
+              </span>
+            </label>
+            <button
+              type="button"
+              className="primary-btn"
+              disabled={!pickedFile || busy || autoPredictBusy}
+              onClick={() => void onStepwiseParse()}
+            >
+              {busy ? "解析中…" : "分步解析"}
+            </button>
+            <div
+              className="sales-forecast-auto-predict-wrap"
+              onPointerDownCapture={(e) => {
+                if (!SF_AUTOPREDICT_DEBUG_LOG) return;
+                const el = e.target;
+                if (!(el instanceof Element)) return;
+                if (!el.closest(".sales-forecast-auto-predict-btn")) return;
+                const hasRunnablePreview = Boolean(preview && preview.rows.length > 0);
+                const autoPredictDisabled =
+                  (!pickedFile && !hasRunnablePreview) || busy || autoPredictBusy;
+                sfAutoPredictLog("pointerdown on 自动预测 button (capture)", {
+                  buttonDisabled: autoPredictDisabled,
+                  reasons: {
+                    noPickedFile: !pickedFile,
+                    noPreviewRows: !hasRunnablePreview,
+                    busy,
+                    autoPredictBusy,
+                  },
+                  pickedFile: pickedFile?.name ?? null,
+                  previewFileName: preview?.fileName ?? null,
+                  previewRowCount: preview?.rows?.length ?? 0,
+                });
+              }}
+            >
+              <button
+                type="button"
+                className="primary-btn sales-forecast-auto-predict-btn"
+                disabled={
+                  (!pickedFile && !(preview && preview.rows.length > 0)) || busy || autoPredictBusy
+                }
+                onClick={() => {
+                  sfAutoPredictLog("onClick 自动预测 (only fires when button enabled)");
+                  void onAutoPredict();
+                }}
+              >
+                <SalesForecastRobotIcon />
+                {autoPredictBusy ? "预测中…" : "自动预测"}
+              </button>
+            </div>
+          </div>
+          {autoPredictBusy && (
+            <section
+              className="card sales-forecast-auto-predict-progress-card"
+              role="status"
+              aria-live="polite"
+              aria-label="自动预测进度"
+            >
+              <div className="sales-forecast-auto-predict-progress-card-head">
+                <h3 className="sales-forecast-auto-predict-progress-card-title">自动预测进度</h3>
+                <span className="sales-forecast-auto-predict-progress-card-badge">执行中</span>
+              </div>
+              <div className="sales-forecast-auto-predict-progress-card-body">
+                <p className="sales-forecast-auto-predict-progress-card-primary">
+                  {autoPredictProgressText ?? "准备中…"}
+                </p>
+                {autoPredictInboundDetailLine ? (
+                  <p className="sales-forecast-auto-predict-progress-card-detail">
+                    {autoPredictInboundDetailLine}
+                  </p>
+                ) : null}
+              </div>
+            </section>
+          )}
+          {error && (
+            <p className="sales-forecast-error" role="alert">
+              {error}
+            </p>
+          )}
         </div>
 
-        {forecastViewTab === "user" && (
-          <div className="sales-forecast-tab-panel" role="tabpanel" aria-label="用户显示模式">
-            <p className="muted small sales-forecast-user-mode-hint">
-              用户显示模式：对外精简视图将放在此 Tab。数据准备与完整调试请切换到「调试显示模式」。
-            </p>
-          </div>
-        )}
-
-        {forecastViewTab === "debug" && (
-          <div
-            className="sales-forecast-tab-panel sales-forecast-tab-panel--debug"
-            role="tabpanel"
-            aria-label="调试显示模式"
-          >
-            <div className="sales-forecast-upload-row">
-              <input
-                id={uploadId}
-                type="file"
-                className="sr-only"
-                accept={CSV_ACCEPT}
-                onChange={onPickFile}
-              />
-              <label htmlFor={uploadId} className="upload-label sales-forecast-file-label">
-                <span className="upload-btn">选择 CSV 文件</span>
-                <span className="muted tiny">
-                  {pickedFile?.name ?? preview?.fileName ?? "未选择文件"}
-                </span>
-              </label>
-              <button
-                type="button"
-                className="primary-btn"
-                disabled={!pickedFile || busy}
-                onClick={() => void onSave()}
-              >
-                {busy ? "读取中…" : "保存"}
-              </button>
-            </div>
-            {error && (
-              <p className="sales-forecast-error" role="alert">
-                {error}
-              </p>
-            )}
-
+        <div
+          className="sales-forecast-tab-panel sales-forecast-tab-panel--debug"
+          role="region"
+          aria-label="销售预测工作区"
+        >
             {preview && (
-        <section className="card sales-data-preview-card">
-          <div className="card-head tight sales-data-preview-card-head">
-            <div className="sales-data-preview-card-head-left">
-              <h3 className="sales-data-preview-title">销售数据预览</h3>
-              <button
-                type="button"
-                className="ghost-btn tiny-btn sales-data-preview-fold-btn"
-                onClick={() => setPreviewCollapsed((c) => !c)}
-                aria-expanded={!previewCollapsed}
-              >
-                {previewCollapsed ? "展开预览" : "折叠预览"}
-              </button>
-            </div>
-            <div className="sales-data-preview-card-head-actions">
-              <button type="button" className="primary-btn sales-disassemble-btn" onClick={onDisassembleMaterial}>
-                拆解物料记录
-              </button>
-            </div>
-          </div>
-          {previewCollapsed ? (
-            <p className="muted small sales-data-preview-collapsed-hint">
-              共 {preview.rows.length} 行数据（不含表头），表格已折叠。
-            </p>
-          ) : (
-            <>
-              <p className="muted small sales-data-preview-meta">
-                共 {preview.rows.length} 行数据（不含表头）
-              </p>
-              <div className="table-wrap sales-data-preview-table-wrap">
-                <table className="data-table sales-data-preview-table">
-                  <thead>
-                    <tr>
-                      {preview.headers.map((h, hi) => (
-                        <th key={hi}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.rows.map((row, ri) => (
-                      <tr key={ri}>
-                        {row.map((cell, ci) => (
-                          <td key={ci} className="task-text-wrap">
-                            {cell}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </section>
-      )}
-
+              <section className="card sales-data-preview-card">
+                <div className="card-head tight sales-data-preview-card-head">
+                  <div className="sales-data-preview-card-head-left">
+                    <h3 className="sales-data-preview-title">销售数据预览</h3>
+                    <button
+                      type="button"
+                      className="ghost-btn tiny-btn sales-data-preview-fold-btn"
+                      onClick={() => setPreviewCollapsed((c) => !c)}
+                      aria-expanded={!previewCollapsed}
+                    >
+                      {previewCollapsed ? "展开预览" : "折叠预览"}
+                    </button>
+                  </div>
+                  <div className="sales-data-preview-card-head-actions">
+                    <button type="button" className="primary-btn sales-disassemble-btn" onClick={onDisassembleMaterial}>
+                      拆解物料记录
+                    </button>
+                  </div>
+                </div>
+                {previewCollapsed ? (
+                  <p className="muted small sales-data-preview-collapsed-hint">
+                    共 {preview.rows.length} 行数据（不含表头），表格已折叠。
+                  </p>
+                ) : (
+                  <>
+                    <p className="muted small sales-data-preview-meta">
+                      共 {preview.rows.length} 行数据（不含表头）
+                    </p>
+                    <div className="table-wrap sales-data-preview-table-wrap">
+                      <table className="data-table sales-data-preview-table">
+                        <thead>
+                          <tr>
+                            {preview.headers.map((h, hi) => (
+                              <th key={hi}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {preview.rows.map((row, ri) => (
+                            <tr key={ri}>
+                              {row.map((cell, ci) => (
+                                <td key={ci} className="task-text-wrap">
+                                  {cell}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </section>
+            )}
       {analysisBase && (
         <section className="card sales-analysis-base-card">
           <div className="card-head tight sales-analysis-base-card-head">
@@ -2482,8 +3034,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
         </section>
         </>
       )}
-          </div>
-        )}
+        </div>
       </section>
     </div>
   );
