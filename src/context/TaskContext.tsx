@@ -17,6 +17,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   coerceTaskCategoryPair,
   getDefaultCategoryPair,
@@ -236,21 +237,26 @@ export function TaskProvider({ children }: { children: ReactNode }) {
         code?: string;
       },
     ): Task => {
-      const id = `t_${Date.now()}`;
       const createdAt = new Date().toISOString().slice(0, 10);
-      let row!: Task;
-      setTasks((prev) => {
-        const code =
-          input.code ??
-          buildAutoTaskCode(input.department ?? "", input.categoryLevel1 ?? "", prev);
-        row = reconcileTaskStatusByDueDate({
-          ...input,
-          id,
-          code,
-          createdAt,
+      let row: Task | undefined;
+      flushSync(() => {
+        setTasks((prev) => {
+          const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+          const code =
+            input.code ??
+            buildAutoTaskCode(input.department ?? "", input.categoryLevel1 ?? "", prev);
+          row = reconcileTaskStatusByDueDate({
+            ...input,
+            id,
+            code,
+            createdAt,
+          });
+          return [row, ...prev];
         });
-        return [row, ...prev];
       });
+      if (!row) {
+        throw new Error("添加任务失败：未能写入任务列表。");
+      }
       schedulePushNewTaskToSmartsheet(row, updateTask);
       return row;
     },

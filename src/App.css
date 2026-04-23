@@ -7194,9 +7194,23 @@ button.app-config-md-download.linkish {
   margin-top: 16px;
 }
 
+.report-plan-gen-outer-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
 .report-plan-gen-title {
-  margin: 0 0 6px;
+  margin: 0;
   font-size: 1rem;
+}
+
+.report-plan-gen-company-ready {
+  font-weight: 500;
+  color: var(--muted, #64748b);
 }
 
 .report-plan-gen-hint {

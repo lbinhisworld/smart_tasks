@@ -43,9 +43,10 @@ export type StoredPlanGenRowState = {
   rowError?: string;
 };
 
+/** pending：占位；splitting：模型拆解中；ready：表格已就绪待用户填领导指示；generating：正在写入任务；done：本轮任务生成结束 */
 export type StoredPlanGenCompanyState = {
   companyName: string;
-  cardPhase: "pending" | "running" | "done";
+  cardPhase: "pending" | "splitting" | "ready" | "generating" | "done";
   rows: StoredPlanGenRowState[];
   generatedCount: number;
 };
@@ -196,11 +197,20 @@ function parsePlanGenRow(v: unknown): StoredPlanGenRowState | null {
 function parsePlanGenCompany(v: unknown): StoredPlanGenCompanyState | null {
   if (!isRecord(v)) return null;
   const companyName = v.companyName;
-  const cardPhase = v.cardPhase;
+  let cardPhase = v.cardPhase;
   const rowsRaw = v.rows;
   const generatedCount = v.generatedCount;
   if (typeof companyName !== "string") return null;
-  if (cardPhase !== "pending" && cardPhase !== "running" && cardPhase !== "done") return null;
+  if (cardPhase === "running") cardPhase = "splitting";
+  if (
+    cardPhase !== "pending" &&
+    cardPhase !== "splitting" &&
+    cardPhase !== "ready" &&
+    cardPhase !== "generating" &&
+    cardPhase !== "done"
+  ) {
+    return null;
+  }
   if (!Array.isArray(rowsRaw)) return null;
   if (typeof generatedCount !== "number" || !Number.isFinite(generatedCount)) return null;
   const rows: StoredPlanGenRowState[] = [];
@@ -264,14 +274,24 @@ export function normalizePlanGenPanelAfterLoad(
 ): StoredPlanGenPanelState | null {
   if (!panel) return null;
   return {
-    companies: panel.companies.map((c) => ({
-      ...c,
-      cardPhase: c.cardPhase === "running" ? "pending" : c.cardPhase,
-      rows: c.rows.map((r) => ({
-        ...r,
-        rowPhase: r.rowPhase === "generating" ? "pending" : r.rowPhase,
-      })),
-    })),
+    companies: panel.companies.map((c) => {
+      let cardPhase: StoredPlanGenCompanyState["cardPhase"] =
+        (c.cardPhase as string) === "running" ? "splitting" : c.cardPhase;
+      if (cardPhase === "splitting") {
+        cardPhase = c.rows.length > 0 ? "ready" : "pending";
+      }
+      if (cardPhase === "generating") {
+        cardPhase = "ready";
+      }
+      return {
+        ...c,
+        cardPhase,
+        rows: c.rows.map((r) => ({
+          ...r,
+          rowPhase: r.rowPhase === "generating" ? "pending" : r.rowPhase,
+        })),
+      };
+    }),
   };
 }
 

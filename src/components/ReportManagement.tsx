@@ -5,6 +5,7 @@
  * - `consumeExtractionFocusFromStorage`：挂载时 `useLayoutEffect` 读一次；另监听 `OPEN_REPORTS_PAGE_EVENT`，在报告页已挂载时也能消费看板「跳转原文」写入的 `sessionStorage`。
  * - 提取日期优先从正文 `extractPrimaryReportDateFromPlainText`（文首日期优先），否则 `formatExtractionDate()`，与 `normalizeProductionReportJson` 对齐。
  * - 监听 `LLM_CONFIG_CHANGED_EVENT` 仅用于 bump 内部 epoch，触发依赖 `readLlmEnv()` 的 UI 重算。
+ * - 点击「解析」：在校验附件/正文与 LLM 配置通过后，**先清空**报告提取区（正文、附件、预览、中台表、侧栏草稿等），再按快照执行提取与模型调用。
  *
  * @module ReportManagement
  */
@@ -187,6 +188,8 @@ export function ReportManagement() {
   const [planGenPanel, setPlanGenPanel] = useState<PlanGenPanelState | null>(() =>
     normalizePlanGenPanelAfterLoad(loadReportSidePanelsDraft()?.planGenPanel ?? null),
   );
+  const planGenPanelRef = useRef<PlanGenPanelState | null>(planGenPanel);
+  planGenPanelRef.current = planGenPanel;
   const [planGenRunning, setPlanGenRunning] = useState(false);
   /** 助手「输入报告」解析成功后自动串联环节 2→3 的触发计数（每解析成功且请求链式执行时 +1） */
   const [assistCoreMemoryChainNonce, setAssistCoreMemoryChainNonce] = useState(0);
@@ -296,11 +299,21 @@ export function ReportManagement() {
     [hubBranchParses, parsed, extracted?.text],
   );
 
-  const canRunPlanGenFromReport =
+  const canPrepareDailyPlanTable =
     phase === "done" &&
     planGenContexts.length > 0 &&
     !planGenRunning &&
     readLlmEnv() != null;
+
+  const canCommitDailyPlanTasks =
+    planGenPanel != null &&
+    phase === "done" &&
+    readLlmEnv() != null &&
+    !planGenRunning &&
+    planGenPanel.companies.some(
+      (co) => co.cardPhase === "ready" && co.rows.some((r) => r.rowPhase === "pending"),
+    ) &&
+    !planGenPanel.companies.some((co) => co.cardPhase === "splitting" || co.cardPhase === "generating");
 
   const consumeExtractionFocusFromStorage = useCallback(() => {
     try {
@@ -475,17 +488,12 @@ export function ReportManagement() {
       if (assistantChatFollowup) dispatchAssistantReportParseResult(detail);
     };
 
-    clearReportExtractionPreviewDraft();
-    setError(null);
-    setExtracted(null);
-    setRawModel(null);
-    setParsed(null);
-    setLlmCallStats(null);
-    setHubStandardRows(null);
-    setHubBranchParses(null);
-    setHubExtractionProgress(null);
-    const effectiveManual = sourceTextOverride ?? manualText.trim();
-    if (!file && !effectiveManual) {
+    const fileSnapshot = file;
+    const manualSnapshot = manualText;
+    const manualFromDataHubSnapshot = manualFromDataHub;
+    const effectiveManual = sourceTextOverride ?? manualSnapshot.trim();
+
+    if (!fileSnapshot && !effectiveManual) {
       setError("请上传附件，或在上方文本框中粘贴日报正文（二选一）。");
       emitFollowup({ ok: false, extractionDate: "", companyName: "", error: "未提供附件或日报正文。" });
       return;
@@ -498,13 +506,34 @@ export function ReportManagement() {
       emitFollowup({ ok: false, extractionDate: "", companyName: "", error: msg });
       return;
     }
+
+    clearReportExtractionPreviewDraft();
+    clearReportSidePanelsDraft();
+    setFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setManualText("");
+    setManualFromDataHub(false);
+    setDataHubImportInfo(null);
+    setShowPrompt(false);
+    setError(null);
+    setExtracted(null);
+    setRawModel(null);
+    setParsed(null);
+    setLlmCallStats(null);
+    setHubStandardRows(null);
+    setHubBranchParses(null);
+    setHubExtractionProgress(null);
+    setPhase("idle");
     setTaskProgressPanel(null);
     setPlanGenPanel(null);
-    clearReportSidePanelsDraft();
+    setTaskProgressRunning(false);
+    setPlanGenRunning(false);
+    setCitationsRefreshing(false);
+    citationsRefreshGuardRef.current = false;
 
     try {
       setPhase("reading");
-      const ex = file ? await extractTextFromFile(file) : { text: effectiveManual };
+      const ex = fileSnapshot ? await extractTextFromFile(fileSnapshot) : { text: effectiveManual };
       setExtracted(ex);
       if (!ex.text.trim()) {
         setPhase("error");
@@ -515,7 +544,7 @@ export function ReportManagement() {
       }
 
       // 数据中台填入的正文：标准提取 data.list → 表格 + 按条调用大模型 + 多分公司预览卡
-      if (!file && manualFromDataHub) {
+      if (!fileSnapshot && manualFromDataHubSnapshot) {
         const hubTry = tryParseDataHubDailyListJson(ex.text);
         if (hubTry.isHubShape) {
           if (hubTry.rows.length === 0) {
@@ -1031,17 +1060,18 @@ export function ReportManagement() {
     [visibleTasks, hubBranchParses, parsed, extracted?.text, updateTask],
   );
 
-  const runDailyPlanTaskGeneration = useCallback(
-    async (opts?: { quiet?: boolean }): Promise<{ generated: number; skipped: string | null }> => {
+  /** 仅拆解 6.1/6.2 为表格行，不写入任务列表。 */
+  const prepareDailyPlanTaskTable = useCallback(
+    async (opts?: { quiet?: boolean }): Promise<{ skipped: string | null }> => {
       const quiet = opts?.quiet ?? false;
       const env = readLlmEnv();
       if (!env) {
         if (!quiet) window.alert("请先配置大模型 Key。");
-        return { generated: 0, skipped: quiet ? "no_env" : null };
+        return { skipped: quiet ? "no_env" : null };
       }
       if (phase !== "done") {
         if (!quiet) window.alert("请先完成报告解析。");
-        return { generated: 0, skipped: "phase" };
+        return { skipped: "phase" };
       }
       const contexts = collectReportCompanyPlanContexts(hubBranchParses, parsed, extracted?.text ?? null);
       if (contexts.length === 0) {
@@ -1050,39 +1080,77 @@ export function ReportManagement() {
             "当前没有可用的分公司日报解析结果（需中台多卡含分公司与正文，或单卡解析含「分公司名称」）。",
           );
         }
-        return { generated: 0, skipped: "no_contexts" };
+        return { skipped: "no_contexts" };
       }
-      let totalGenerated = 0;
-    setPlanGenPanel({
-      companies: contexts.map((c) => ({
-        companyName: c.companyName,
-        cardPhase: "pending",
-        rows: [],
-        generatedCount: 0,
-      })),
-    });
-    setPlanGenRunning(true);
-    try {
-      for (let ci = 0; ci < contexts.length; ci++) {
-        const ctx = contexts[ci]!;
-        setPlanGenPanel((prev) => {
-          if (!prev) return prev;
-          return {
-            companies: prev.companies.map((co, i) =>
-              i === ci ? { ...co, cardPhase: "running" } : co,
-            ),
-          };
-        });
-        let splitItems: Awaited<ReturnType<typeof llmSplitDailyPlanItemsFromSections>> = [];
-        try {
-          splitItems = await llmSplitDailyPlanItemsFromSections(env, {
-            companyName: ctx.companyName,
-            reportDate: ctx.reportDate,
-            coordinationSection: ctx.coordinationPlain,
-            nextPlanSection: ctx.nextPlanPlain,
+      setPlanGenPanel({
+        companies: contexts.map((c) => ({
+          companyName: c.companyName,
+          cardPhase: "pending",
+          rows: [],
+          generatedCount: 0,
+        })),
+      });
+      setPlanGenRunning(true);
+      try {
+        for (let ci = 0; ci < contexts.length; ci++) {
+          const ctx = contexts[ci]!;
+          setPlanGenPanel((prev) => {
+            if (!prev) return prev;
+            return {
+              companies: prev.companies.map((co, i) =>
+                i === ci ? { ...co, cardPhase: "splitting" } : co,
+              ),
+            };
           });
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          let splitItems: Awaited<ReturnType<typeof llmSplitDailyPlanItemsFromSections>> = [];
+          try {
+            splitItems = await llmSplitDailyPlanItemsFromSections(env, {
+              companyName: ctx.companyName,
+              reportDate: ctx.reportDate,
+              coordinationSection: ctx.coordinationPlain,
+              nextPlanSection: ctx.nextPlanPlain,
+            });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            setPlanGenPanel((prev) => {
+              if (!prev) return prev;
+              return {
+                companies: prev.companies.map((co, i) =>
+                  i === ci
+                    ? {
+                        ...co,
+                        cardPhase: "done",
+                        generatedCount: 0,
+                        rows: [
+                          {
+                            id: `rpg-err-${ci}`,
+                            initiatingDepartment: ctx.companyName,
+                            executingDepartment: ctx.companyName,
+                            reportDate: ctx.reportDate,
+                            requestDescription: "（拆解失败）",
+                            leaderInstruction: "",
+                            rowPhase: "error",
+                            taskCode: null,
+                            rowError: msg,
+                          },
+                        ],
+                      }
+                    : co,
+                ),
+              };
+            });
+            continue;
+          }
+          const rowStates: PlanGenRowState[] = splitItems.map((raw, idx) => ({
+            id: `rpg-${ci}-${idx}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            initiatingDepartment: raw.initiatingDepartment,
+            executingDepartment: raw.executingDepartment,
+            reportDate: ctx.reportDate,
+            requestDescription: raw.requestDescription,
+            leaderInstruction: "",
+            rowPhase: "pending",
+            taskCode: null,
+          }));
           setPlanGenPanel((prev) => {
             if (!prev) return prev;
             return {
@@ -1090,78 +1158,95 @@ export function ReportManagement() {
                 i === ci
                   ? {
                       ...co,
-                      cardPhase: "done",
+                      rows: rowStates,
+                      cardPhase: rowStates.length === 0 ? "done" : "ready",
                       generatedCount: 0,
-                      rows: [
-                        {
-                          id: `rpg-err-${ci}`,
-                          initiatingDepartment: ctx.companyName,
-                          executingDepartment: ctx.companyName,
-                          reportDate: ctx.reportDate,
-                          requestDescription: "（拆解失败）",
-                          leaderInstruction: "",
-                          rowPhase: "error",
-                          taskCode: null,
-                          rowError: msg,
-                        },
-                      ],
                     }
                   : co,
               ),
             };
           });
-          continue;
         }
-        const rowStates: PlanGenRowState[] = splitItems.map((raw, idx) => ({
-          id: `rpg-${ci}-${idx}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-          initiatingDepartment: raw.initiatingDepartment,
-          executingDepartment: raw.executingDepartment,
-          reportDate: ctx.reportDate,
-          requestDescription: raw.requestDescription,
-          leaderInstruction: "",
-          rowPhase: "pending",
-          taskCode: null,
-        }));
-        setPlanGenPanel((prev) => {
-          if (!prev) return prev;
-          return {
-            companies: prev.companies.map((co, i) =>
-              i === ci ? { ...co, rows: rowStates } : co,
-            ),
-          };
-        });
-        if (rowStates.length === 0) {
+      } finally {
+        setPlanGenRunning(false);
+      }
+      return { skipped: null };
+    },
+    [phase, hubBranchParses, parsed, extracted?.text],
+  );
+
+  /** 用户填写领导指示后，按表格逐行写入任务列表。 */
+  const commitDailyPlanTasksFromPanel = useCallback(async () => {
+    if (!readLlmEnv()) {
+      window.alert("请先配置大模型 Key。");
+      return;
+    }
+    const panel0 = planGenPanelRef.current;
+    if (!panel0) return;
+    const hasWork = panel0.companies.some(
+      (co) => co.cardPhase === "ready" && co.rows.some((r) => r.rowPhase === "pending"),
+    );
+    if (!hasWork) {
+      window.alert("没有待生成的表格行。请先点击「拆解日报计划条目」生成表格，并确认存在「待生成」行。");
+      return;
+    }
+    if (panel0.companies.some((co) => co.cardPhase === "splitting" || co.cardPhase === "generating")) {
+      window.alert("请等待拆解或上一轮任务生成结束后再试。");
+      return;
+    }
+
+    setPlanGenRunning(true);
+    try {
+      for (let ci = 0; ci < panel0.companies.length; ci++) {
+        const coHead = planGenPanelRef.current?.companies[ci];
+        if (!coHead || coHead.cardPhase !== "ready") continue;
+        const pendingIndices = coHead.rows
+          .map((r, j) => (r.rowPhase === "pending" ? j : -1))
+          .filter((j) => j >= 0);
+        if (pendingIndices.length === 0) {
           setPlanGenPanel((prev) => {
             if (!prev) return prev;
             return {
-              companies: prev.companies.map((co, i) =>
-                i === ci ? { ...co, cardPhase: "done", generatedCount: 0 } : co,
+              companies: prev.companies.map((c, i) =>
+                i === ci ? { ...c, cardPhase: "done", generatedCount: 0 } : c,
               ),
             };
           });
           continue;
         }
+
+        setPlanGenPanel((prev) => {
+          if (!prev) return prev;
+          return {
+            companies: prev.companies.map((c, i) =>
+              i === ci ? { ...c, cardPhase: "generating" } : c,
+            ),
+          };
+        });
+
         let okCount = 0;
-        for (let ri = 0; ri < rowStates.length; ri++) {
-          const rs = rowStates[ri]!;
+        for (const ri of pendingIndices) {
+          await Promise.resolve();
+          const snap = planGenPanelRef.current;
+          const rs = snap?.companies[ci]?.rows[ri];
+          if (!rs || rs.rowPhase !== "pending") continue;
+
           setPlanGenPanel((prev) => {
             if (!prev) return prev;
             return {
-              companies: prev.companies.map((co, i) => {
-                if (i !== ci) return co;
+              companies: prev.companies.map((c, i) => {
+                if (i !== ci) return c;
                 return {
-                  ...co,
-                  rows: co.rows.map((r, j) =>
+                  ...c,
+                  rows: c.rows.map((r, j) =>
                     j === ri ? { ...r, rowPhase: "generating" } : r,
                   ),
                 };
               }),
             };
           });
-          const leaderInstruction = mergePerspectiveLeaderPrefix(
-            user.perspective,
-            rs.leaderInstruction,
-          );
+
+          const leaderInstruction = mergePerspectiveLeaderPrefix(user.perspective, rs.leaderInstruction);
           const pendingRow: PendingDailyPlanTaskRow = {
             id: rs.id,
             initiatingDepartment: rs.initiatingDepartment,
@@ -1187,9 +1272,7 @@ export function ReportManagement() {
                   return {
                     ...co,
                     rows: co.rows.map((r, j) =>
-                      j === ri
-                        ? { ...r, rowPhase: "done", taskCode: created.code }
-                        : r,
+                      j === ri ? { ...r, rowPhase: "done", taskCode: created.code } : r,
                     ),
                   };
                 }),
@@ -1215,6 +1298,7 @@ export function ReportManagement() {
             });
           }
         }
+
         setPlanGenPanel((prev) => {
           if (!prev) return prev;
           return {
@@ -1223,15 +1307,11 @@ export function ReportManagement() {
             ),
           };
         });
-        totalGenerated += okCount;
       }
     } finally {
       setPlanGenRunning(false);
     }
-      return { generated: totalGenerated, skipped: null };
-    },
-    [phase, hubBranchParses, parsed, extracted?.text, user.perspective, addTask],
-  );
+  }, [addTask, user.perspective]);
 
   useEffect(() => {
     if (phase !== "done" || assistCoreMemoryChainNonce === 0) return;
@@ -1242,11 +1322,11 @@ export function ReportManagement() {
     void (async () => {
       try {
         const prog = await runTaskProgressUpdate({ quiet: true });
-        const plan = await runDailyPlanTaskGeneration({ quiet: true });
+        const plan = await prepareDailyPlanTaskTable({ quiet: true });
         dispatchAssistantReportChainDone({
           progressUpdated: prog.updated,
           progressSkipped: prog.skipped,
-          planGenerated: plan.generated,
+          planGenerated: 0,
           planSkipped: plan.skipped,
           chainError: null,
         });
@@ -1263,7 +1343,7 @@ export function ReportManagement() {
         lastAssistCoreChainFinishedRef.current = Math.max(lastAssistCoreChainFinishedRef.current, target);
       }
     })();
-  }, [phase, assistCoreMemoryChainNonce, runTaskProgressUpdate, runDailyPlanTaskGeneration]);
+  }, [phase, assistCoreMemoryChainNonce, runTaskProgressUpdate, prepareDailyPlanTaskTable]);
 
   const removeHistory = useCallback((id: string) => {
     setHistory(removeExtractionHistoryItem(id));
@@ -1609,6 +1689,25 @@ export function ReportManagement() {
               </button>
               <button
                 type="button"
+                className="ghost-btn tiny-btn"
+                disabled={!canPrepareDailyPlanTable}
+                title={
+                  !readLlmEnv()
+                    ? "请先配置大模型"
+                    : phase !== "done"
+                      ? "请先完成解析"
+                      : planGenContexts.length === 0
+                        ? "当前无可用分公司计划上下文"
+                        : planGenRunning
+                          ? "正在拆解中"
+                          : "从解析结果拆解「需公司协调」「下步计划」为下方任务表（不立即写入任务列表）"
+                }
+                onClick={() => void prepareDailyPlanTaskTable()}
+              >
+                拆解日报计划条目
+              </button>
+              <button
+                type="button"
                 className="primary-btn tiny-btn"
                 disabled={!canSaveToHistory}
                 onClick={saveToHistory}
@@ -1745,25 +1844,6 @@ export function ReportManagement() {
           <div className="report-task-progress-outer card nested">
             <div className="report-task-progress-outer-top">
               <h3 className="report-task-progress-outer-title">现有任务进度更新</h3>
-              <button
-                type="button"
-                className="ghost-btn tiny-btn"
-                disabled={!canRunPlanGenFromReport}
-                title={
-                  !readLlmEnv()
-                    ? "请先配置大模型"
-                    : phase !== "done"
-                      ? "请先完成解析"
-                      : planGenContexts.length === 0
-                        ? "当前无可用分公司计划上下文"
-                        : planGenRunning
-                          ? "正在生成中"
-                          : "从解析 JSON 的「需公司协调」「下步计划」拆解条目并写入任务列表"
-                }
-                onClick={() => void runDailyPlanTaskGeneration()}
-              >
-                按日报计划生成新任务
-              </button>
             </div>
             <p className="muted small report-task-progress-hint">
               按当前提取结果中的分公司顺序处理：加载该分公司下未标记「已完成」的任务，由大模型根据对应日报填写进度与困难，并建议状态（可在下方修改）；不会自动写回任务管理，请在任务模块中手动同步。
@@ -1894,10 +1974,27 @@ export function ReportManagement() {
 
         {planGenPanel && (
           <div className="report-plan-gen-outer card nested">
-            <h3 className="report-plan-gen-title">日报计划任务生成</h3>
+            <div className="report-plan-gen-outer-top">
+              <h3 className="report-plan-gen-title">日报计划任务生成</h3>
+              <button
+                type="button"
+                className="primary-btn tiny-btn"
+                disabled={!canCommitDailyPlanTasks}
+                title={
+                  !readLlmEnv()
+                    ? "请先配置大模型"
+                    : !canCommitDailyPlanTasks
+                      ? "请先在上方点击「拆解日报计划条目」生成表格，补充领导指示后，且存在「待生成」行时再试"
+                      : "按表格逐行写入任务列表并刷新任务编号"
+                }
+                onClick={() => void commitDailyPlanTasksFromPanel()}
+              >
+                生成任务
+              </button>
+            </div>
             <p className="muted small report-plan-gen-hint">
-              按分公司顺序：从解析结果中读取「6.1 需公司协调」「6.2
-              下步计划」摘录，先由模型拆成表格行，再逐行调用与看板相同的逻辑生成任务（已写入任务管理）。发起日期为日报「提取日期」。
+              请先在「报告内容提取」栏点击「拆解日报计划条目」，由模型将「6.1 需公司协调」「6.2
+              下步计划」拆成下方表格；在「领导指示/建议」中手工补充后，再点击本卡片标题栏右侧「生成任务」，系统将逐行写入任务管理（发起日期为日报提取日期）。
             </p>
             <div className="report-plan-gen-companies">
               {planGenPanel.companies.map((card, ci) => (
@@ -1905,16 +2002,30 @@ export function ReportManagement() {
                   <div className="report-plan-gen-company-head">
                     <h4 className="report-plan-gen-company-title">{card.companyName}</h4>
                     <div className="report-plan-gen-company-meta">
-                      {card.cardPhase === "running" && (
+                      {card.cardPhase === "splitting" && (
                         <span
                           className="parse-status parse-spinner report-plan-gen-company-spinner"
                           aria-hidden
-                          title="正在生成本分公司计划任务"
+                          title="正在拆解本分公司计划条目"
+                        />
+                      )}
+                      {card.cardPhase === "ready" && (
+                        <span className="report-plan-gen-company-ready muted tiny">
+                          请补充领导指示后点击上方「生成任务」
+                        </span>
+                      )}
+                      {card.cardPhase === "generating" && (
+                        <span
+                          className="parse-status parse-spinner report-plan-gen-company-spinner"
+                          aria-hidden
+                          title="正在写入任务列表"
                         />
                       )}
                       {card.cardPhase === "done" && (
                         <span className="report-plan-gen-company-done">
-                          ✅ 已完成 {card.generatedCount} 个任务生成
+                          {card.rows.length === 1 && card.rows[0]!.rowPhase === "error"
+                            ? `⚠️ ${(card.rows[0]!.rowError ?? "拆解失败").slice(0, 120)}`
+                            : `✅ 已完成 ${card.generatedCount} 个任务生成`}
                         </span>
                       )}
                     </div>
@@ -1932,7 +2043,7 @@ export function ReportManagement() {
                         </tr>
                       </thead>
                       <tbody>
-                        {card.cardPhase === "running" && card.rows.length === 0 && (
+                        {card.cardPhase === "splitting" && card.rows.length === 0 && (
                           <tr>
                             <td colSpan={6} className="empty-cell muted">
                               正在读取「需公司协调 / 下步计划」并拆解计划条目…
@@ -1950,7 +2061,11 @@ export function ReportManagement() {
                                 type="text"
                                 className="pending-leader-instruct-input"
                                 value={row.leaderInstruction}
-                                disabled={planGenRunning || row.rowPhase === "generating"}
+                                disabled={
+                                  planGenRunning ||
+                                  row.rowPhase === "generating" ||
+                                  row.rowPhase === "done"
+                                }
                                 onChange={(e) => {
                                   const v = e.target.value;
                                   setPlanGenPanel((prev) => {
