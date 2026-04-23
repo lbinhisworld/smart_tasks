@@ -4,22 +4,9 @@
  * @module utils/hrTalentPool
  */
 
-import type { DataPlatform, ExternalApiHeaderRow, ExternalApiProfile } from "../types/externalApiProfile";
-import { saveDataSyncLastBody } from "./dataSyncResponseStorage";
+import type { DataPlatform, ExternalApiProfile } from "../types/externalApiProfile";
+import { runDataHubInterfaceTestFetch } from "./dataHubInterfaceTestFetch";
 import { extractBusinessRowsFromJson } from "./extractBusinessRowsFromJson";
-
-const TEST_TIMEOUT_MS = 30_000;
-const RESPONSE_PREVIEW_MAX = 200_000;
-
-function headersToRecord(rows: ExternalApiHeaderRow[]): Record<string, string> {
-  const o: Record<string, string> = {};
-  for (const { key, value } of rows) {
-    const k = key.trim();
-    if (!k) continue;
-    o[k] = value;
-  }
-  return o;
-}
 
 /**
  * 在数据中台配置中定位「齐峰协同」平台下名称含「人才库」的接口（优先名称含「获取人才库」）。
@@ -42,7 +29,8 @@ export function findTalentPoolProfile(
 }
 
 /**
- * 与数据中台「测试」一致：请求接口并写入会话缓存。
+ * 与数据中台「发送测试请求」一致：请求接口并写入会话缓存（见 {@link runDataHubInterfaceTestFetch}）。
+ *
  * @param profile 接口配置
  */
 export async function fetchTalentPoolRaw(profile: ExternalApiProfile): Promise<{
@@ -51,43 +39,7 @@ export async function fetchTalentPoolRaw(profile: ExternalApiProfile): Promise<{
   error?: string;
   httpStatus?: number;
 }> {
-  const ctrl = new AbortController();
-  const timer = window.setTimeout(() => ctrl.abort(), TEST_TIMEOUT_MS);
-  const method = profile.method.trim().toUpperCase() || "GET";
-  const headers = headersToRecord(profile.headers);
-  const hasBody = ["POST", "PUT", "PATCH", "DELETE"].includes(method) && profile.body.trim().length > 0;
-  if (hasBody && !headers["Content-Type"] && !headers["content-type"]) {
-    headers["Content-Type"] = "application/json";
-  }
-  try {
-    const res = await fetch(profile.url, {
-      method,
-      headers,
-      body: hasBody ? profile.body : undefined,
-      signal: ctrl.signal,
-    });
-    const text = await res.text();
-    const preview =
-      text.length > RESPONSE_PREVIEW_MAX
-        ? `${text.slice(0, RESPONSE_PREVIEW_MAX)}\n\n…（已截断，原始长度 ${text.length} 字符）`
-        : text;
-    if (res.ok) {
-      saveDataSyncLastBody(profile.id, preview);
-    }
-    return res.ok
-      ? { ok: true, body: preview, httpStatus: res.status }
-      : { ok: false, body: preview, error: `HTTP ${res.status}`, httpStatus: res.status };
-  } catch (e) {
-    const msg =
-      e instanceof Error
-        ? e.name === "AbortError"
-          ? `请求超时（>${TEST_TIMEOUT_MS / 1000}s）或已中止`
-          : e.message
-        : String(e);
-    return { ok: false, body: "", error: msg };
-  } finally {
-    window.clearTimeout(timer);
-  }
+  return runDataHubInterfaceTestFetch(profile);
 }
 
 /**

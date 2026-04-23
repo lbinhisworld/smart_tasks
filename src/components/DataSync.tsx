@@ -5,7 +5,7 @@
  * @module DataSync
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DataPlatform, ExternalApiHeaderRow, ExternalApiProfile } from "../types/externalApiProfile";
 import { DATA_HUB_CLEANED_JSON_PREFIX } from "../utils/dataHubCleanedJsonStorage";
 import {
@@ -30,6 +30,11 @@ import { saveDataSyncLastBody, loadDataSyncLastBody } from "../utils/dataSyncRes
 import { extractBusinessRowsFromJson } from "../utils/extractBusinessRowsFromJson";
 import { callLlmChatText, LLM_CONFIG_CHANGED_EVENT, readLlmEnv } from "../utils/llmExtract";
 import { parseCurl } from "../utils/parseCurl";
+import {
+  filterDataHubBusinessRows,
+  loadDataHubBusinessViewFilter,
+  saveDataHubBusinessViewFilter,
+} from "../utils/dataHubBusinessViewFilter";
 
 const RESPONSE_PREVIEW_MAX = 200_000;
 const TEST_TIMEOUT_MS = 30_000;
@@ -80,24 +85,6 @@ function headersToRecord(rows: ExternalApiHeaderRow[]): Record<string, string> {
   return o;
 }
 
-function filterBusinessRows(
-  rows: Record<string, string>[],
-  query: string,
-  scopeCol: "all" | string,
-): Record<string, string>[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return rows;
-  return rows.filter((row) => {
-    if (scopeCol === "all") {
-      return Object.entries(row).some(
-        ([key, val]) => key.toLowerCase().includes(q) || String(val).toLowerCase().includes(q),
-      );
-    }
-    const cell = String(row[scopeCol] ?? "");
-    return cell.toLowerCase().includes(q);
-  });
-}
-
 /**
  * 数据中台：按数据源分组的接口列表 + 接口基础配置 / 数据列表（业务数据、原始 JSON、清洗后 JSON）。
  */
@@ -129,6 +116,8 @@ export function DataSync() {
 
   const [businessFilterQuery, setBusinessFilterQuery] = useState("");
   const [businessFilterScope, setBusinessFilterScope] = useState<"all" | string>("all");
+  /** 切换接口后的首帧跳过写入，避免用切换前的筛选状态覆盖 localStorage */
+  const skipNextBusinessFilterSaveRef = useRef(false);
   const [cellDetail, setCellDetail] = useState<CellDetailState | null>(null);
 
   const [cleaningRulesDraft, setCleaningRulesDraft] = useState("");
@@ -398,7 +387,7 @@ export function DataSync() {
   );
 
   const filteredRows = useMemo(
-    () => filterBusinessRows(businessExtracted.rows, businessFilterQuery, businessFilterScope),
+    () => filterDataHubBusinessRows(businessExtracted.rows, businessFilterQuery, businessFilterScope),
     [businessExtracted.rows, businessFilterQuery, businessFilterScope],
   );
 
@@ -410,6 +399,30 @@ export function DataSync() {
       setBusinessFilterScope("all");
     }
   }, [businessExtracted.columns, businessFilterScope]);
+
+  /** 切换接口时恢复该接口下已保存的「业务数据」关键字筛选，供日报列表同源复用 */
+  useLayoutEffect(() => {
+    if (!selectedId) return;
+    skipNextBusinessFilterSaveRef.current = true;
+    const f = loadDataHubBusinessViewFilter(selectedId);
+    if (f) {
+      setBusinessFilterQuery(f.query);
+      setBusinessFilterScope(f.scope);
+    } else {
+      setBusinessFilterQuery("");
+      setBusinessFilterScope("all");
+    }
+  }, [selectedId]);
+
+  /** 将业务 VIEW 筛选写入 localStorage，报告管理「日报列表」与 {@link filterDataHubBusinessRows} 共用 */
+  useEffect(() => {
+    if (!selectedId) return;
+    if (skipNextBusinessFilterSaveRef.current) {
+      skipNextBusinessFilterSaveRef.current = false;
+      return;
+    }
+    saveDataHubBusinessViewFilter(selectedId, businessFilterQuery, businessFilterScope);
+  }, [selectedId, businessFilterQuery, businessFilterScope]);
 
   const togglePlatformExpanded = (platformId: string) => {
     setExpandedPlatforms((prev) => {
