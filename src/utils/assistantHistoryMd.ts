@@ -246,7 +246,7 @@ export function inferTopicFromHistoryMarkdown(historyText: string): InferredTopi
     const intentPart = im[1].trim();
     if (intentPart.includes("报告管理")) return "report_management";
     if (intentPart.includes("任务管理")) return "task_management";
-    if (intentPart.includes("数据看板")) return "dashboard";
+    if (intentPart.includes("数据看板") || intentPart.includes("销售看板")) return "dashboard";
   }
   return null;
 }

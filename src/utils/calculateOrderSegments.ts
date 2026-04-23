@@ -92,7 +92,7 @@ export function classifyOrderQuantityLabel(
 }
 
 /**
- * @param rawQuantities - 与业务表「数量」列一致：可为字符串或数字；解析时识别千分位与美式/欧式小数；0、负数、非数字、空会剔除。
+ * @param rawQuantities - 与业务表「数量」列一致：可为字符串或数字；解析规则见 `parseQuantityNumberString`（`,` 千分位、`.` 小数点）；0、负数、非数字、空会剔除。
  */
 export function calculateOrderSegments(rawQuantities: readonly unknown[]): OrderSegmentResult {
   const valid: number[] = [];

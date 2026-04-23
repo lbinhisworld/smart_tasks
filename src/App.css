@@ -1343,6 +1343,236 @@ button.linkish:hover {
   padding-top: 2px;
 }
 
+.sales-dashboard-subtabs {
+  margin-top: 2px;
+}
+
+.sales-dash-repurchase-panel {
+  padding: 18px 20px;
+}
+
+.sales-dash-repurchase-hint {
+  margin: 0;
+  max-width: 52rem;
+  line-height: 1.55;
+}
+
+.repurchase-forecast-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.repurchase-forecast-intro {
+  margin: 0;
+  max-width: 52rem;
+  line-height: 1.55;
+}
+
+.repurchase-forecast-totals {
+  max-width: 52rem;
+}
+
+.repurchase-forecast-total-card .kpi-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.repurchase-forecast-total-value-num {
+  font-weight: 700;
+}
+
+.repurchase-forecast-total-value-num--strong {
+  color: #15803d;
+}
+
+.repurchase-forecast-total-value-num--weak {
+  color: #2563eb;
+}
+
+.repurchase-forecast-total-unit {
+  margin-left: 0.35em;
+  font-size: 0.55em;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0;
+  vertical-align: 0.08em;
+}
+
+.repurchase-forecast-empty {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.repurchase-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 8px 4px;
+  border-left: 2px solid rgba(100, 116, 139, 0.35);
+}
+
+.repurchase-timeline-node {
+  margin: 0 0 0 12px;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.repurchase-timeline-node > summary {
+  list-style: none;
+}
+
+.repurchase-timeline-node > summary::-webkit-details-marker {
+  display: none;
+}
+
+.repurchase-timeline-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  cursor: pointer;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  user-select: none;
+}
+
+.repurchase-timeline-summary:hover {
+  background: #f1f5f9;
+}
+
+.repurchase-timeline-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+  flex-shrink: 0;
+}
+
+.repurchase-timeline-date {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.repurchase-timeline-count {
+  margin-left: auto;
+}
+
+.repurchase-timeline-summary-forecast {
+  font-size: 0.8125rem;
+  color: var(--text-muted, #64748b);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.repurchase-timeline-summary-forecast-strong-num {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #15803d;
+}
+
+.repurchase-timeline-summary-forecast-weak-num {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #2563eb;
+}
+
+.repurchase-timeline-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0 20px 0;
+  padding-left: 4px;
+}
+
+.repurchase-card {
+  border-radius: 12px;
+  padding: 14px 16px;
+  border: 1px solid transparent;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.repurchase-card--strong {
+  background: linear-gradient(145deg, rgba(220, 252, 231, 0.95) 0%, rgba(187, 247, 208, 0.55) 100%);
+  border-color: rgba(22, 163, 74, 0.45);
+}
+
+.repurchase-card--weak {
+  background: linear-gradient(145deg, rgba(219, 234, 254, 0.95) 0%, rgba(191, 219, 254, 0.55) 100%);
+  border-color: rgba(37, 99, 235, 0.4);
+}
+
+.repurchase-card-head {
+  margin-bottom: 10px;
+}
+
+.repurchase-card-type-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.repurchase-card-type-badge--strong {
+  color: #14532d;
+  background: rgba(22, 163, 74, 0.2);
+  border: 1px solid rgba(22, 163, 74, 0.35);
+}
+
+.repurchase-card-type-badge--weak {
+  color: #1e3a8a;
+  background: rgba(37, 99, 235, 0.18);
+  border: 1px solid rgba(37, 99, 235, 0.35);
+}
+
+.repurchase-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.repurchase-card-row {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: start;
+  font-size: 0.88rem;
+}
+
+.repurchase-card-row--params {
+  align-items: start;
+}
+
+.repurchase-card-dt {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.repurchase-card-dd {
+  margin: 0;
+  color: var(--text);
+  min-width: 0;
+}
+
+.repurchase-card-params {
+  margin: 0;
+}
+
+.repurchase-card-qty {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 看板：目录树虚线层级 + 卡片逐级缩小 */
 .report-dash-tree {
   position: relative;

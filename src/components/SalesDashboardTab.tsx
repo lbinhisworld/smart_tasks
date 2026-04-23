@@ -1,10 +1,11 @@
 /**
- * @fileoverview 数据看板「销售看板」：订货单分布多级卡片——团队/人、产品（型号/品名）、客户（销售组/客户名称），树形与指标样式一致。
+ * @fileoverview 数据看板 · 销售 Tab：「订单分布」为订货单三级层级图；「复购预测」为进货模式预计下次下单日时间线。
  *
  * @module SalesDashboardTab
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { RepurchaseForecastPanel } from "./RepurchaseForecastPanel";
 import {
   buildSalesInboundDashboards,
   type CustomerNameInboundRow,
@@ -418,7 +419,10 @@ function InboundModelBlock({
   );
 }
 
+type SalesBoardSubTab = "distribution" | "repurchase";
+
 export function SalesDashboardTab() {
+  const [salesSubTab, setSalesSubTab] = useState<SalesBoardSubTab>("distribution");
   const [dataVersion, setDataVersion] = useState(0);
   useEffect(() => {
     const onVis = () => {
@@ -480,19 +484,58 @@ export function SalesDashboardTab() {
     setOpenTeamCustomer((prev) => (prev === name ? null : name));
   }, []);
 
-  if (!dash.ok) {
-    return (
-      <div className="report-dashboard-tab">
-        <p className="report-hint">{dash.reason}</p>
-      </div>
-    );
-  }
-
-  const { rowCount, unclassifiedCount, segmentResult, summary, teams, models, teamCustomers } = dash;
-  const { fragmented_limit: fl, high_limit: hl } = segmentResult.thresholds;
-
   return (
     <div className="report-dashboard-tab">
+      <div
+        className="report-main-tabs sales-dashboard-subtabs"
+        role="tablist"
+        aria-label="订单分布与复购预测"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={salesSubTab === "distribution"}
+          className={`report-main-tab${salesSubTab === "distribution" ? " is-active" : ""}`}
+          onClick={() => setSalesSubTab("distribution")}
+        >
+          订单分布
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={salesSubTab === "repurchase"}
+          className={`report-main-tab${salesSubTab === "repurchase" ? " is-active" : ""}`}
+          onClick={() => setSalesSubTab("repurchase")}
+        >
+          复购预测
+        </button>
+      </div>
+
+      {salesSubTab === "repurchase" ? (
+        <section className="card sales-dash-repurchase-panel" aria-label="复购预测">
+          <RepurchaseForecastPanel />
+        </section>
+      ) : null}
+
+      {salesSubTab === "distribution" && !dash.ok ? (
+        <p className="report-hint" role="status">
+          {dash.reason}
+        </p>
+      ) : null}
+
+      {salesSubTab === "distribution" && dash.ok
+        ? (() => {
+            const {
+              rowCount,
+              unclassifiedCount,
+              segmentResult,
+              summary,
+              teams,
+              models,
+              teamCustomers,
+            } = dash;
+            const { fragmented_limit: fl, high_limit: hl } = segmentResult.thresholds;
+            return (
       <div className="report-dash-tree">
         <div className="report-dash-tree-node report-dash-tree-node--level1">
           <div
@@ -631,6 +674,9 @@ export function SalesDashboardTab() {
           </div>
         )}
       </div>
+            );
+          })()
+        : null}
     </div>
   );
 }

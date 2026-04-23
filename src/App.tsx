@@ -1,7 +1,7 @@
 /**
- * @fileoverview 应用壳：多页路由（看板 / 报告 / 任务 / 销售预测 / 数据中台）、`TaskProvider`。
+ * @fileoverview 应用壳：多页路由（数据看板 / 报告 / 任务 / 销售预测 / 数据中台）、`TaskProvider`。
  * 各页**同时挂载**，以 `display` 切换可见，便于数据看板 AI 助手后台驱动报告解析等而**不切换整页**。
- * `OPEN_REPORTS_PAGE_EVENT` 仍将路由切到报告页（看板「跳转原文」等）。
+ * `OPEN_REPORTS_PAGE_EVENT` 仍将路由切到报告页（数据看板「跳转原文」等）。
  * `ASSISTANT_UI_ACTION_EVENT` 中导航类令牌不调用 `setPage`。
  *
  * @module App

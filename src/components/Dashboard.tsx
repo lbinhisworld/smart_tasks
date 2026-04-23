@@ -1,5 +1,5 @@
 /**
- * @fileoverview 首页看板：任务 / 报告 / 销售 / 人事（人才池）四 Tab；报告 Tab 切换时刷新 `loadExtractionHistory`。
+ * @fileoverview 首页数据看板：任务 / 报告 / 销售 / 人事（人才池）四 Tab；销售 Tab 内含订单分布与复购预测子 Tab；报告 Tab 切换时刷新 `loadExtractionHistory`。
  *
  * @module Dashboard
  */

@@ -273,7 +273,13 @@ function normalizeTopic(v: unknown): AssistantTopic {
     const s = v.trim().toLowerCase();
     if (s === "report" || s.includes("报告")) return "report_management";
     if (s === "task" || s.includes("任务管理")) return "task_management";
-    if (s.includes("数据看板") || s.includes("首页看板") || s === "board" || s.includes("dashboard"))
+    if (
+      s.includes("数据看板") ||
+      s.includes("销售看板") ||
+      s.includes("首页看板") ||
+      s === "board" ||
+      s.includes("dashboard")
+    )
       return "dashboard";
     if (s.includes("综合") || s.includes("general")) return "general";
   }
@@ -612,7 +618,7 @@ export function inferOfflineTopic(question: string): AssistantTopic {
   if (reportHit && !taskHit) return "report_management";
   if (taskHit && !reportHit) return "task_management";
   if (reportHit && taskHit) return "general";
-  if (/数据看板|首页看板/.test(s)) return "dashboard";
+  if (/数据看板|销售看板|首页看板/.test(s)) return "dashboard";
   if (/看板|风险|关注|环形|当前视角|总览|逾期|节点/.test(s)) return "general";
   if (/同步|数据中台|清洗|接口/.test(s)) return "general";
   return "general";
@@ -636,7 +642,7 @@ export function inferOfflineIntentSummary(question: string): string {
   const s = question.trim();
   if (!s) return "未检测到有效文字，可能是空输入。";
   if (/报告|提取|日报|KPI|产量|提取历史|结构化/.test(s)) {
-    return "判断为与「报告管理」或「数据看板 · 报告看板」相关的咨询。";
+    return "判断为与「报告管理」或「销售看板 · 报告看板」相关的咨询。";
   }
   if (/任务列表|新建任务|编辑任务|任务编号|大类|子类|状态|协调方|进展|计划历史/.test(s)) {
     return "判断为与「任务管理」相关的咨询。";
