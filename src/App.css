@@ -2468,10 +2468,14 @@ button.linkish:hover {
 
 .pending-sub-table.pending-sub-table--pending-tasks th.pending-sub-col-date,
 .pending-sub-table.pending-sub-table--pending-tasks td.pending-sub-col-date {
-  width: 12%;
-  max-width: 7.25rem;
+  width: 14%;
+  min-width: 10.5rem;
+  max-width: 13rem;
   box-sizing: border-box;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  overflow: hidden;
 }
 
 .pending-sub-table th,
@@ -2595,6 +2599,11 @@ button.pending-date-to-report {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  vertical-align: top;
 }
 
 button.pending-jump-link:hover,
