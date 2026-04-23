@@ -1157,6 +1157,16 @@ button.linkish:hover {
 
 .report-daily-list-toolbar {
   flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.report-daily-list-refresh-error {
+  font-size: 0.82rem;
+  color: var(--danger);
+  max-width: min(100%, 42rem);
 }
 
 .report-daily-list-source-row {
@@ -3217,11 +3227,20 @@ tr.task-table-data-row.is-detail-open {
   white-space: inherit;
 }
 
-/* 报告管理：晨会议题 */
+/* 报告管理：晨会议题（会议室大屏 / 卡片 v2） */
 .report-morning-topic-panel {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.report-morning-topic-panel--boardroom {
+  gap: clamp(12px, 1.4vw, 22px);
+}
+
+.report-morning-topic-lede {
+  max-width: 62rem;
+  line-height: 1.58;
 }
 
 .report-morning-topic-toolbar,
@@ -3252,7 +3271,340 @@ tr.task-table-data-row.is-detail-open {
 
 .report-morning-topic-title {
   margin: 0 0 4px;
-  font-size: 1.1rem;
+  font-size: clamp(1.1rem, 1rem + 0.45vw, 1.45rem);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-morning-topic-new-btn {
+  padding: 0.5rem 1.1rem;
+  font-size: clamp(0.88rem, 0.82rem + 0.2vw, 1rem);
+  font-weight: 600;
+  border-radius: 10px;
+  align-self: flex-start;
+  box-shadow: 0 2px 10px rgba(29, 107, 198, 0.22);
+}
+
+/* 晨会议题：大屏卡片网格（投影距离可读性优先） */
+.report-morning-topic-cards-outer {
+  max-width: 100%;
+}
+
+.report-morning-topic-cards-empty {
+  text-align: center;
+  padding: clamp(2rem, 4vw, 3rem) 1.25rem;
+  color: var(--muted);
+  font-size: clamp(1rem, 0.95rem + 0.25vw, 1.12rem);
+  border: 1px dashed var(--border);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f1f5f9 0%, #ffffff 55%);
+}
+
+.report-morning-topic-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20.75rem), 1fr));
+  gap: clamp(1.15rem, 1.6vw, 2rem);
+}
+
+@media (min-width: 1200px) {
+  .report-morning-topic-cards {
+    grid-template-columns: repeat(auto-fill, minmax(24rem, 1fr));
+  }
+}
+
+@media (min-width: 1600px) {
+  .report-morning-topic-cards {
+    grid-template-columns: repeat(auto-fill, minmax(28rem, 1fr));
+  }
+}
+
+@media (min-width: 2200px) {
+  .report-morning-topic-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.report-morning-topic-card {
+  position: relative;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: linear-gradient(
+    152deg,
+    #ffffff 0%,
+    #f8fafc 38%,
+    #eef2f9 100%
+  );
+  box-shadow:
+    var(--shadow),
+    0 12px 28px rgba(15, 23, 42, 0.06),
+    0 28px 64px rgba(15, 23, 42, 0.08);
+  padding: clamp(1.15rem, 1.35vw, 1.65rem) clamp(1.1rem, 1.3vw, 1.55rem) clamp(1rem, 1.15vw, 1.45rem)
+    clamp(1.35rem, 1.55vw, 1.85rem);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(0.85rem, 1vw, 1.1rem);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.report-morning-topic-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  border-radius: 18px 0 0 18px;
+  background: var(--muted);
+  opacity: 0.35;
+}
+
+.report-morning-topic-card.rmt-card--pending::before {
+  background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
+  opacity: 1;
+}
+
+.report-morning-topic-card.rmt-card--done::before {
+  background: linear-gradient(180deg, #34d399 0%, #0d9f6e 100%);
+  opacity: 1;
+}
+
+.report-morning-topic-card.rmt-card--closed::before {
+  background: linear-gradient(180deg, #94a3b8 0%, #64748b 100%);
+  opacity: 1;
+}
+
+.report-morning-topic-card-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.report-morning-topic-card-subhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.85rem;
+}
+
+.report-morning-topic-card-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.6rem;
+}
+
+.report-morning-topic-card-code {
+  font-size: clamp(0.78rem, 0.72rem + 0.2vw, 0.88rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.report-morning-topic-card-cat {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.28rem 0.7rem;
+  border-radius: 999px;
+  font-size: clamp(0.74rem, 0.7rem + 0.15vw, 0.82rem);
+  font-weight: 700;
+  background: linear-gradient(180deg, rgba(219, 234, 254, 0.95) 0%, rgba(191, 219, 254, 0.65) 100%);
+  color: #1e40af;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.report-morning-topic-card-status {
+  font-size: clamp(0.84rem, 0.8rem + 0.15vw, 0.95rem);
+  padding: 0.42rem 0.65rem;
+  border-radius: 10px;
+  min-width: 6.5rem;
+  font-weight: 600;
+  border-color: rgba(148, 163, 184, 0.55);
+  background: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.report-morning-topic-card-title {
+  margin: 0;
+  padding-bottom: 0.55rem;
+  margin-bottom: 0.1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+  font-size: clamp(1.2rem, 0.95rem + 1.15vw, 1.72rem);
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 10;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.report-morning-topic-card-meta {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.45rem 1rem;
+  font-size: clamp(0.9rem, 0.84rem + 0.22vw, 1.05rem);
+}
+
+@media (min-width: 480px) {
+  .report-morning-topic-card-meta {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.report-morning-topic-card-meta-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  padding: 0.45rem 0.5rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+}
+
+.report-morning-topic-card-meta dt {
+  margin: 0;
+  font-size: clamp(0.68rem, 0.64rem + 0.12vw, 0.76rem);
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.report-morning-topic-card-meta dd {
+  margin: 0;
+  font-weight: 600;
+  color: #1e293b;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.report-morning-topic-card-insights {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.report-morning-topic-card-block {
+  padding: 0.65rem 0.75rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(203, 213, 225, 0.85);
+  border-left: 4px solid rgba(29, 107, 198, 0.55);
+  min-height: 0;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+}
+
+.report-morning-topic-card-block-label {
+  display: block;
+  font-size: clamp(0.68rem, 0.64rem + 0.1vw, 0.74rem);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 0.4rem;
+  cursor: pointer;
+}
+
+.report-morning-topic-card-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  min-height: 4.5rem;
+  font-size: clamp(0.88rem, 0.82rem + 0.2vw, 1rem);
+  line-height: 1.48;
+  color: #334155;
+  word-break: break-word;
+  resize: vertical;
+  border-radius: 10px;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  padding: 0.5rem 0.6rem;
+  background: #ffffff;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.report-morning-topic-card-textarea:focus {
+  outline: none;
+  border-color: rgba(29, 107, 198, 0.55);
+  box-shadow:
+    inset 0 1px 2px rgba(15, 23, 42, 0.04),
+    0 0 0 3px rgba(29, 107, 198, 0.18);
+}
+
+.report-morning-topic-card-notes {
+  padding: 0.5rem 0.65rem;
+  border-radius: 10px;
+  background: var(--warning-soft);
+  border: 1px solid rgba(212, 160, 18, 0.28);
+}
+
+.report-morning-topic-card-notes-body {
+  margin: 0.25rem 0 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.report-morning-topic-card-foot {
+  margin-top: auto;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+@media (min-width: 540px) {
+  .report-morning-topic-card-foot {
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+  }
+}
+
+.report-morning-topic-card-tasks {
+  flex: 1;
+  min-width: 0;
+  font-size: clamp(0.82rem, 0.78rem + 0.15vw, 0.92rem);
+  line-height: 1.4;
+}
+
+.report-morning-topic-card-foot-label {
+  display: block;
+  font-size: clamp(0.66rem, 0.62rem + 0.1vw, 0.74rem);
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25rem;
+}
+
+.report-morning-topic-card-tasks-val {
+  display: block;
+  word-break: break-word;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.report-morning-topic-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+.report-morning-topic-card-action-btn {
+  font-size: clamp(0.82rem, 0.78rem + 0.12vw, 0.9rem);
+  padding: 0.45rem 0.75rem;
+  border-radius: 10px;
+  font-weight: 600;
 }
 
 .report-morning-topic-modal-field {

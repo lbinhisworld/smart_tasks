@@ -1,12 +1,16 @@
 /**
- * @fileoverview 报告管理「日报列表」：从数据中台「数据列表」与接口测试缓存（`loadDataSyncLastBody`）解析行，
- * 映射展示列、按创建时间降序、支持多键回退以兼容不同接口字段命名。
+ * @fileoverview 报告管理「日报列表」：从会话中原始接口响应（`loadDataSyncLastBody`）解析行；
+ * 与数据中台「数据列表 → 业务数据」一致：先 `extractBusinessRowsFromJson`，再应用已持久化的 VIEW 关键字筛选（见 `dataHubBusinessViewFilter`）。
  *
  * @module reportDailyListFromDataHub
  */
 
 import { extractBusinessRowsFromJson } from "./extractBusinessRowsFromJson";
 import { extractDateFromPlainText } from "./extractDateFromText";
+import {
+  filterDataHubBusinessRows,
+  loadDataHubBusinessViewFilter,
+} from "./dataHubBusinessViewFilter";
 
 /** 本地日历日 `YYYY-MM-DD`（用于日期控件默认值） */
 export function localIsoDate(d = new Date()): string {
@@ -191,6 +195,35 @@ export function sortDailyRowsByCreatedDesc(rows: DailyReportListDisplayRow[]): D
   });
 }
 
+/**
+ * 与数据中台「数据列表 → 业务数据」VIEW 一致：解析原始 JSON → 扁平行 → 应用已保存的关键字筛选 → 映射为日报列表行并排序。
+ *
+ * @param profileId 当前接口 id（用于读取 VIEW 筛选）；空则不做关键字筛选
+ * @param body 原始响应正文
+ */
+export function parseDailyRowsForReportList(
+  profileId: string | null,
+  body: string,
+): DailyReportListDisplayRow[] {
+  const raw = body.trim();
+  if (!raw) return [];
+  let root: unknown;
+  try {
+    root = JSON.parse(raw) as unknown;
+  } catch {
+    return [];
+  }
+  let { rows } = extractBusinessRowsFromJson(root);
+  if (profileId) {
+    const f = loadDataHubBusinessViewFilter(profileId);
+    if (f) {
+      rows = filterDataHubBusinessRows(rows, f.query, f.scope);
+    }
+  }
+  const mapped = rows.map((r) => mapRowToDailyDisplay(r));
+  return sortDailyRowsByCreatedDesc(mapped);
+}
+
 /** 日报列表筛选条件 */
 export interface DailyReportListFilters {
   /** 分公司/职能部门（对应数据中台「所属分公司」单元格，下拉选值） */
@@ -198,7 +231,7 @@ export interface DailyReportListFilters {
   /** 部门/车间（下拉选值） */
   deptWorkshop: string;
   submitter: string;
-  /** `YYYY-MM-DD`，空表示不按日期筛；初始可为当天 */
+  /** `YYYY-MM-DD`，空表示不按日期筛；日报列表初始为空以展示全部 */
   reportDateIso: string;
 }
 
