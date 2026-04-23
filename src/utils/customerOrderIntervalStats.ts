@@ -101,26 +101,29 @@ export function formatIntervalDaysStat(n: number | null): string {
   return n.toFixed(2);
 }
 
-/** 变异系数阈值：std/mean 小于等于 0.3 为强周期 */
 const CV_STRONG_MAX = 0.3;
+const CV_WEAK_MAX = 0.6;
 
 /**
  * 由当前行「订货间隔标准差」「订货间隔平均值」两格**展示串**生成周期性标签（主标签 + 换行 + cv 备注行）。
- * 两者均可解析为有效数且均值为正时 CV=std/mean；若 CV 小于等于 0.3 为强周期，否则弱周期。
- * 任一格无数据或不可算 CV 时：弱周期，备注 `cv= -`。
+ * 两者均可解析为有效数且均值为正时 CV=std/mean：≤0.3 强周期；>0.3 且 ≤0.6 弱周期；>0.6 不规则。
+ * 无数据或不可算时：主标签为不规则，备注 `cv= -`。
  */
 export function buildPeriodicityLabelFromIntervalCells(stdStr: string, meanStr: string): string {
   const stdN = parseOrderIntervalMetricCell(stdStr);
   const meanN = parseOrderIntervalMetricCell(meanStr);
   if (stdN === null || meanN === null || !Number.isFinite(meanN) || meanN <= 0) {
-    return "弱周期性\ncv= -";
+    return "不规则\ncv= -";
   }
   const cv = stdN / meanN;
   const cvLine = `cv=${cv.toFixed(2)}`;
   if (cv <= CV_STRONG_MAX) {
     return `强周期性\n${cvLine}`;
   }
-  return `弱周期性\n${cvLine}`;
+  if (cv <= CV_WEAK_MAX) {
+    return `弱周期性\n${cvLine}`;
+  }
+  return `不规则\n${cvLine}`;
 }
 
 export function readOrderIntervalStdMeanAtPath(
