@@ -9,6 +9,12 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
+      port: 5173,
+      strictPort: true,
+      /** 避免公司代理或浏览器强缓存导致懒加载 chunk 仍指向旧版（如议题列表仍为表格） */
+      headers: {
+        "Cache-Control": "no-store",
+      },
       proxy: {
         /** 企业微信文档智能表格 Webhook（开发环境绕过浏览器 CORS） */
         "/api/qy-wedoc": {
@@ -35,6 +41,12 @@ export default defineConfig(({ mode }) => {
               },
             }
           : {}),
+      },
+    },
+    /** 本地 `vite preview` 与开发环境一致，避免懒加载 chunk 被浏览器磁盘缓存成旧版 */
+    preview: {
+      headers: {
+        "Cache-Control": "no-store",
       },
     },
   };

@@ -1,22 +1,25 @@
 /**
- * @fileoverview 报告管理「日报列表」页签：数据源为数据中台接口「测试」写入的会话缓存（与数据列表业务 VIEW 同源），
- * 接口按已保存偏好 / 首个有缓存 / 首个配置自动选择；支持分公司/职能部门与部门下拉、日报日期、提交人筛选及日报详情抽屉。
+ * @fileoverview 报告管理「日报列表」页签：数据来自数据中台接口会话缓存；「刷新数据」与数据中台「发送测试请求」同源在线拉取并写缓存。
+ * 接口按已保存偏好 / 首个有缓存 / 首个配置自动选择；支持分公司/职能部门与部门下拉、日报日期（默认不按日期筛；点选空日期时自动带入当天）、提交人筛选及日报详情抽屉。
  *
  * @module ReportDailyListPanel
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import type { ExternalApiProfile } from "../types/externalApiProfile";
 import { loadDataHubState } from "../utils/externalApiStorage";
 import { loadDataSyncLastBody } from "../utils/dataSyncResponseStorage";
+import { DATA_HUB_CLEANED_JSON_PREFIX } from "../utils/dataHubCleanedJsonStorage";
+import { DATA_HUB_BUSINESS_FILTER_CHANGED_EVENT } from "../utils/dataHubBusinessViewFilter";
+import { parseScriptCleaningSpec, runGroupBranchWorkshopDateCleaning } from "../utils/dataHubScriptCleaning";
 import {
   type DailyReportListDisplayRow,
   type DailyReportListFilters,
   filterDailyRowsExact,
   localIsoDate,
-  parseDailyRowsFromHubResponseBody,
+  parseDailyRowsForReportList,
   readPreferredDailyListProfileId,
-  sortDailyRowsByCreatedDesc,
   writePreferredDailyListProfileId,
   looksLikeHubListJson,
 } from "../utils/reportDailyListFromDataHub";
@@ -26,6 +29,7 @@ import {
   type DailyReportHighlightSpan,
   type DailyTopicDraftPayload,
 } from "../utils/dailyReportTopicHighlightStorage";
+import { runDataHubInterfaceTestFetch } from "../utils/dataHubInterfaceTestFetch";
 import { getPlainTextRangeWithinElement } from "../utils/plainTextSelectionInElement";
 
 /** 日报详情列表预览最大字符数 */
@@ -34,13 +38,13 @@ const REPORT_DETAIL_PREVIEW_CHARS = 50;
 /** 与 `externalApiStorage` 中数据中台状态键一致，其它标签页写入后可触发本页刷新 profile 元数据 */
 const DATA_HUB_STATE_STORAGE_KEY = "qifeng_data_hub_state_v1";
 
-/** 首次进入：日报日期默认为当天 */
+/** 首次进入：不按日报日期筛选（展示全部）；用户点选或聚焦日期框且仍为空时再填入当天，便于日历定位。 */
 function initialFilters(): DailyReportListFilters {
   return {
     branchFunctional: "",
     deptWorkshop: "",
     submitter: "",
-    reportDateIso: localIsoDate(),
+    reportDateIso: "",
   };
 }
 
@@ -52,6 +56,17 @@ function emptyFilters(): DailyReportListFilters {
     submitter: "",
     reportDateIso: "",
   };
+}
+
+/**
+ * 日报日期为空时写入当天，便于用户点选日期控件时日历默认落在今天（用户仍可在日历中改选）。
+ *
+ * @param prev 当前筛选条件
+ * @returns 若已选日期则原样返回，否则 `reportDateIso` 为 `localIsoDate()`
+ */
+function seedReportDateTodayIfEmpty(prev: DailyReportListFilters): DailyReportListFilters {
+  if (prev.reportDateIso.trim() !== "") return prev;
+  return { ...prev, reportDateIso: localIsoDate() };
 }
 
 function distinctSorted(values: string[]): string[] {
@@ -127,6 +142,8 @@ export function ReportDailyListPanel({ onAddToTopic, highlightNonce = 0 }: Repor
   const [profileId, setProfileId] = useState<string>(() => readPreferredDailyListProfileId() ?? "");
   const [filters, setFilters] = useState<DailyReportListFilters>(() => initialFilters());
   const [tick, setTick] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [detailDrawer, setDetailDrawer] = useState<{ text: string; rowKey: string } | null>(null);
   const detailPreRef = useRef<HTMLPreElement>(null);
 
@@ -155,10 +172,13 @@ export function ReportDailyListPanel({ onAddToTopic, highlightNonce = 0 }: Repor
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("focus", onFocus);
     window.addEventListener("storage", onStorage);
+    const onHubFilter = () => bump();
+    window.addEventListener(DATA_HUB_BUSINESS_FILTER_CHANGED_EVENT, onHubFilter);
     return () => {
       document.removeEventListener("visibilitychange", onVis);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("storage", onStorage);
+      window.removeEventListener(DATA_HUB_BUSINESS_FILTER_CHANGED_EVENT, onHubFilter);
     };
   }, []);
 
@@ -190,9 +210,8 @@ export function ReportDailyListPanel({ onAddToTopic, highlightNonce = 0 }: Repor
 
   const parsedRows = useMemo((): DailyReportListDisplayRow[] => {
     if (!cachedBody) return [];
-    const rows = parseDailyRowsFromHubResponseBody(cachedBody);
-    return sortDailyRowsByCreatedDesc(rows);
-  }, [cachedBody]);
+    return parseDailyRowsForReportList(profileId, cachedBody);
+  }, [cachedBody, profileId, tick]);
 
   const branchOptions = useMemo(
     () => distinctSorted(parsedRows.map((r) => r.parentCompany)),
@@ -219,13 +238,62 @@ export function ReportDailyListPanel({ onAddToTopic, highlightNonce = 0 }: Repor
     return () => window.removeEventListener("keydown", onKey);
   }, [detailDrawer]);
 
+  /**
+   * 与数据中台当前接口「发送测试请求」一致：在线拉取并写入会话缓存，再刷新本页表格。
+   */
+  const handleRefreshData = async () => {
+    setRefreshError(null);
+    if (!profileId) {
+      window.alert("请先在下拉中选择数据源接口（或到「数据中台」配置接口）。");
+      return;
+    }
+    const profile = profiles.find((x) => x.id === profileId);
+    if (!profile) {
+      window.alert("当前接口配置不存在，请刷新页面或到「数据中台」检查。");
+      return;
+    }
+    setRefreshing(true);
+    try {
+      const res = await runDataHubInterfaceTestFetch(profile);
+      if (res.ok && res.body.trim() && profile.jsonCleaningMode === "script") {
+        const spec = parseScriptCleaningSpec(profile.jsonCleaningScriptSpec);
+        if (spec) {
+          const cleaned = runGroupBranchWorkshopDateCleaning(res.body, spec);
+          if (cleaned.ok) {
+            try {
+              sessionStorage.setItem(DATA_HUB_CLEANED_JSON_PREFIX + profile.id, cleaned.text);
+            } catch {
+              /* quota */
+            }
+          }
+        }
+      }
+      setTick((n) => n + 1);
+      reloadHubState();
+      if (!res.ok) {
+        const extra = res.httpStatus != null ? `（HTTP ${res.httpStatus}）` : "";
+        setRefreshError((res.error ?? "请求失败") + extra);
+      }
+    } catch (e) {
+      setRefreshError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
     <section className="card report-tab-panel report-daily-list-panel">
       <div className="card-head report-daily-list-head report-daily-list-head--toolbar-only">
         <div className="report-daily-list-toolbar">
-          <button type="button" className="ghost-btn tiny-btn" onClick={() => setTick((n) => n + 1)}>
-            刷新数据
+          <button
+            type="button"
+            className="ghost-btn tiny-btn"
+            disabled={refreshing || profiles.length === 0}
+            onClick={() => void handleRefreshData()}
+          >
+            {refreshing ? "刷新中…" : "刷新数据"}
           </button>
+          {refreshError ? <span className="report-daily-list-refresh-error">{refreshError}</span> : null}
         </div>
       </div>
 
@@ -233,9 +301,9 @@ export function ReportDailyListPanel({ onAddToTopic, highlightNonce = 0 }: Repor
         <p className="muted small report-daily-list-hint">尚未配置数据中台接口。请先到「数据中台」添加数据源与接口。</p>
       )}
 
-      {profileId && !cachedBody && (
+      {profileId && !cachedBody && !refreshing && (
         <p className="muted small report-daily-list-hint">
-          当前接口暂无会话缓存。请到「数据中台」选中同一接口，在「数据列表」中点击「测试」加载响应后，再回到此处点击「刷新数据」。
+          当前接口暂无会话缓存。可点击「刷新数据」在线拉取（等同「数据中台 → 发送测试请求」写入原始响应）；拉取后本列表与「数据中台 → 数据列表 → 业务数据」使用相同解析与关键字筛选（在数据中台修改关键字后会自动同步）。
         </p>
       )}
 
@@ -296,6 +364,16 @@ export function ReportDailyListPanel({ onAddToTopic, highlightNonce = 0 }: Repor
               type="date"
               className="fld report-daily-list-date-input"
               value={filters.reportDateIso}
+              title="留空表示不按日期筛选（查看全部）。点选或 Tab 聚焦本框且当前为空时，自动填入今天以便在日历中改选。"
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                flushSync(() => {
+                  setFilters((f) => seedReportDateTodayIfEmpty(f));
+                });
+              }}
+              onFocus={() => {
+                setFilters((f) => seedReportDateTodayIfEmpty(f));
+              }}
               onChange={(e) => setFilters((f) => ({ ...f, reportDateIso: e.target.value }))}
               aria-label="按日报日期筛选"
             />

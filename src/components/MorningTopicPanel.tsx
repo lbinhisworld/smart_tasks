@@ -1,5 +1,5 @@
 /**
- * @fileoverview 报告管理「议题管理」：晨会议题 CRUD、分类/状态筛选、从议题派发任务（与任务管理新建逻辑一致）。
+ * @fileoverview 报告管理「议题管理」：晨会议题 CRUD、分类/状态筛选；卡片列表优先展示议题标题（会议室大屏），卡片内可直接编辑最终结论与可复用经验并持久化，从议题派发任务与任务管理新建逻辑一致。
  *
  * @module MorningTopicPanel
  */
@@ -43,6 +43,25 @@ function isMorningStatus(v: string): v is MorningTopicStatus {
 }
 
 /**
+ * 卡片左侧强调条与状态选择框的修饰 class，便于远距识别议题进度。
+ *
+ * @param status 议题状态
+ * @returns BEM modifier，无匹配时为空串
+ */
+function morningTopicCardStatusModifier(status: MorningTopicStatus): string {
+  switch (status) {
+    case "未讨论":
+      return "rmt-card--pending";
+    case "已讨论":
+      return "rmt-card--done";
+    case "已关闭":
+      return "rmt-card--closed";
+    default:
+      return "";
+  }
+}
+
+/**
  * 「可复用经验」输入框占位说明：引导按问答对书写，便于检索与复用。
  */
 const REUSABLE_EXPERIENCE_PLACEHOLDER = `建议采用问答对格式，多条经验之间空一行。
@@ -50,14 +69,6 @@ const REUSABLE_EXPERIENCE_PLACEHOLDER = `建议采用问答对格式，多条经
 示例：
 问：现场典型问题或偏差是什么？
 答：根因、已采取措施与后续注意点。`;
-
-/** 列表内「结论 / 经验」弹窗编辑态 */
-interface InsightModalState {
-  id: string;
-  code: string;
-  finalConclusion: string;
-  reusableExperience: string;
-}
 
 export interface MorningTopicPanelProps {
   /** 由日报详情「添加至议题」带入；保存成功后写入高亮并由父级清空 */
@@ -83,7 +94,6 @@ export function MorningTopicPanel({
   const [filterCategory, setFilterCategory] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [createOpen, setCreateOpen] = useState(false);
-  const [insightModal, setInsightModal] = useState<InsightModalState | null>(null);
   const [dispatchTopic, setDispatchTopic] = useState<MorningTopic | null>(null);
 
   const [draft, setDraft] = useState({
@@ -138,15 +148,6 @@ export function MorningTopicPanel({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [createOpen]);
-
-  useEffect(() => {
-    if (!insightModal) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setInsightModal(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [insightModal]);
 
   const filtered = useMemo(() => {
     return topics.filter((t) => {
@@ -224,15 +225,18 @@ export function MorningTopicPanel({
   };
 
   return (
-    <section className="card report-tab-panel report-morning-topic-panel">
+    <section
+      className="card report-tab-panel report-morning-topic-panel report-morning-topic-panel--boardroom"
+      data-morning-topic-layout="cards-v3"
+    >
       <div className="card-head report-morning-topic-head">
         <div>
           <h2 className="report-morning-topic-title">议题管理</h2>
-          <p className="muted small">
-            用于公司高管晨会议题；支持新建或由「日报列表」详情摘录发起。派发任务与「任务管理 · 手工新建任务」一致，并自动关联议题编号。表中「最终结论」「可复用经验」为两行预览，完整录入请点操作列「编辑」。
+          <p className="muted small report-morning-topic-lede">
+            面向例行晨会与会议室大屏：每条议题以卡片呈现，标题优先便于远距阅读。支持新建或由「日报列表」摘录发起；派发任务与「任务管理」手工新建一致并关联议题编号。「最终结论」「可复用经验」可在卡片内直接填写，实时保存。
           </p>
         </div>
-        <button type="button" className="primary-btn tiny-btn" onClick={openNew}>
+        <button type="button" className="primary-btn report-morning-topic-new-btn" onClick={openNew}>
           新建议题
         </button>
       </div>
@@ -266,78 +270,30 @@ export function MorningTopicPanel({
         </label>
       </div>
 
-      <div className="report-daily-list-table-wrap report-morning-topic-table-outer">
-        <table className="report-daily-list-table report-morning-topic-table">
-          <colgroup>
-            <col className="rmt-col-desc" />
-            <col className="rmt-col-cat" />
-            <col className="rmt-col-part" />
-            <col className="rmt-col-discuss" />
-            <col className="rmt-col-created" />
-            <col className="rmt-col-snip" />
-            <col className="rmt-col-snip" />
-            <col className="rmt-col-status" />
-            <col className="rmt-col-notes" />
-            <col className="rmt-col-tasks" />
-            <col className="rmt-col-actions" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th>议题描述</th>
-              <th>议题分类</th>
-              <th>参与人</th>
-              <th>讨论时间</th>
-              <th>创建时间</th>
-              <th>最终结论</th>
-              <th>可复用经验</th>
-              <th>状态</th>
-              <th>备注</th>
-              <th>关联任务</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 ? (
-              <tr>
-                <td colSpan={11} className="report-daily-list-empty-cell">
-                  暂无议题，点击「新建议题」或从日报详情添加。
-                </td>
-              </tr>
-            ) : (
-              filtered.map((t) => (
-                <tr key={t.id}>
-                  <td className="report-morning-topic-desc-cell" title={t.description}>
-                    <span className="report-morning-topic-desc-clamp">
-                      {t.description.length > 72 ? `${t.description.slice(0, 72)}…` : t.description || "—"}
-                    </span>
-                  </td>
-                  <td className="report-morning-topic-td-nowrap">{t.category}</td>
-                  <td className="muted tiny report-morning-topic-td-part">{t.participants.length ? t.participants.join("、") : "—"}</td>
-                  <td className="mono tiny report-morning-topic-td-nowrap report-morning-topic-td-discuss-date">
-                    {t.discussionDate}
-                  </td>
-                  <td className="mono tiny report-morning-topic-td-nowrap report-morning-topic-td-created-date">
-                    {t.createdAt}
-                  </td>
-                  <td className="report-morning-topic-snippet-cell">
-                    <div
-                      className={`report-morning-topic-snippet${t.finalConclusion.trim() ? "" : " is-empty"}`}
-                      title={t.finalConclusion.trim() || undefined}
-                    >
-                      {t.finalConclusion.trim() ? t.finalConclusion : "—"}
+      <div className="report-morning-topic-cards-outer">
+        {filtered.length === 0 ? (
+          <div className="report-morning-topic-cards-empty" role="status">
+            暂无议题，点击「新建议题」或从日报详情添加。
+          </div>
+        ) : (
+          <div className="report-morning-topic-cards" role="list" aria-label="晨会议题列表">
+            {filtered.map((t) => (
+              <article
+                key={t.id}
+                className={`report-morning-topic-card ${morningTopicCardStatusModifier(t.status)}`}
+                role="listitem"
+              >
+                <div className="report-morning-topic-card-hero">
+                  <h3 className="report-morning-topic-card-title">{t.description || "—"}</h3>
+                  <div className="report-morning-topic-card-subhead">
+                    <div className="report-morning-topic-card-identity">
+                      <span className="report-morning-topic-card-code mono" title={t.code}>
+                        {t.code}
+                      </span>
+                      <span className="report-morning-topic-card-cat">{t.category}</span>
                     </div>
-                  </td>
-                  <td className="report-morning-topic-snippet-cell">
-                    <div
-                      className={`report-morning-topic-snippet${t.reusableExperience.trim() ? "" : " is-empty"}`}
-                      title={t.reusableExperience.trim() || undefined}
-                    >
-                      {t.reusableExperience.trim() ? t.reusableExperience : "—"}
-                    </div>
-                  </td>
-                  <td>
                     <select
-                      className="fld tiny-select report-morning-topic-status-select"
+                      className="fld report-morning-topic-card-status"
                       value={t.status}
                       onChange={(e) => {
                         const v = e.target.value;
@@ -351,44 +307,93 @@ export function MorningTopicPanel({
                         </option>
                       ))}
                     </select>
-                  </td>
-                  <td className="muted tiny" title={t.notes}>
-                    {t.notes.length > 20 ? `${t.notes.slice(0, 20)}…` : t.notes || "—"}
-                  </td>
-                  <td className="mono tiny report-morning-topic-td-tasks" title={(t.linkedTaskCodes ?? []).join("、")}>
-                    {(t.linkedTaskCodes?.length ?? 0) > 0 ? (t.linkedTaskCodes ?? []).join("、") : "—"}
-                  </td>
-                  <td className="report-morning-topic-td-actions">
-                    <div className="report-morning-topic-actions">
-                      <button
-                        type="button"
-                        className="ghost-btn tiny-btn"
-                        title="编辑最终结论与可复用经验"
-                        aria-label={`议题 ${t.code} 编辑结论与经验`}
-                        onClick={() =>
-                          setInsightModal({
-                            id: t.id,
-                            code: t.code,
-                            finalConclusion: t.finalConclusion,
-                            reusableExperience: t.reusableExperience,
-                          })
-                        }
-                      >
-                        编辑
-                      </button>
-                      <button type="button" className="ghost-btn tiny-btn" onClick={() => setDispatchTopic(t)}>
-                        派发
-                      </button>
-                      <button type="button" className="ghost-btn tiny-btn danger-text" onClick={() => removeTopic(t.id)}>
-                        删除
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+                  </div>
+                </div>
+
+                <dl className="report-morning-topic-card-meta">
+                  <div className="report-morning-topic-card-meta-row">
+                    <dt>参与人</dt>
+                    <dd>{t.participants.length ? t.participants.join("、") : "—"}</dd>
+                  </div>
+                  <div className="report-morning-topic-card-meta-row">
+                    <dt>讨论时间</dt>
+                    <dd className="mono">{t.discussionDate}</dd>
+                  </div>
+                  <div className="report-morning-topic-card-meta-row">
+                    <dt>创建时间</dt>
+                    <dd className="mono">{t.createdAt}</dd>
+                  </div>
+                </dl>
+
+                <div className="report-morning-topic-card-insights">
+                  <div className="report-morning-topic-card-block">
+                    <label className="report-morning-topic-card-block-label" htmlFor={`rmt-fc-${t.id}`}>
+                      最终结论
+                    </label>
+                    <textarea
+                      id={`rmt-fc-${t.id}`}
+                      className="fld report-morning-topic-card-textarea"
+                      rows={3}
+                      value={t.finalConclusion}
+                      onChange={(e) => patchTopic(t.id, { finalConclusion: e.target.value })}
+                      placeholder="晨会形成的结论要点，可直接填写"
+                      aria-label={`${t.code} 最终结论`}
+                    />
+                  </div>
+                  <div className="report-morning-topic-card-block">
+                    <label className="report-morning-topic-card-block-label" htmlFor={`rmt-re-${t.id}`}>
+                      可复用经验
+                    </label>
+                    <textarea
+                      id={`rmt-re-${t.id}`}
+                      className="fld report-morning-topic-card-textarea"
+                      rows={4}
+                      value={t.reusableExperience}
+                      onChange={(e) => patchTopic(t.id, { reusableExperience: e.target.value })}
+                      placeholder={REUSABLE_EXPERIENCE_PLACEHOLDER}
+                      aria-label={`${t.code} 可复用经验`}
+                    />
+                  </div>
+                </div>
+
+                {t.notes.trim() ? (
+                  <div className="report-morning-topic-card-notes">
+                    <span className="report-morning-topic-card-block-label">备注</span>
+                    <p className="report-morning-topic-card-notes-body">{t.notes}</p>
+                  </div>
+                ) : null}
+
+                <footer className="report-morning-topic-card-foot">
+                  <div
+                    className="report-morning-topic-card-tasks mono"
+                    title={(t.linkedTaskCodes ?? []).join("、")}
+                  >
+                    <span className="report-morning-topic-card-foot-label">关联任务</span>
+                    <span className="report-morning-topic-card-tasks-val">
+                      {(t.linkedTaskCodes?.length ?? 0) > 0 ? (t.linkedTaskCodes ?? []).join("、") : "—"}
+                    </span>
+                  </div>
+                  <div className="report-morning-topic-card-actions">
+                    <button
+                      type="button"
+                      className="ghost-btn report-morning-topic-card-action-btn"
+                      onClick={() => setDispatchTopic(t)}
+                    >
+                      派发
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-btn report-morning-topic-card-action-btn danger-text"
+                      onClick={() => removeTopic(t.id)}
+                    >
+                      删除
+                    </button>
+                  </div>
+                </footer>
+              </article>
+            ))}
+          </div>
+        )}
       </div>
 
       {createOpen && (
@@ -451,7 +456,7 @@ export function MorningTopicPanel({
               />
             </label>
             <label className="report-morning-topic-modal-field">
-              <span>最终结论（可空，会后可在列表点「编辑」补录）</span>
+              <span>最终结论（可空，保存后可在卡片内继续修改）</span>
               <textarea
                 rows={2}
                 value={draft.finalConclusion}
@@ -488,60 +493,6 @@ export function MorningTopicPanel({
           </div>
         </div>
       )}
-
-      {insightModal ? (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onClick={() => {
-            setInsightModal(null);
-          }}
-        >
-          <div className="modal report-morning-topic-modal" role="dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>编辑结论与经验 · {insightModal.code}</h3>
-            <label className="report-morning-topic-modal-field">
-              <span>最终结论</span>
-              <textarea
-                rows={5}
-                value={insightModal.finalConclusion}
-                onChange={(e) =>
-                  setInsightModal((m) => (m ? { ...m, finalConclusion: e.target.value } : m))
-                }
-                placeholder="晨会形成的结论要点"
-              />
-            </label>
-            <label className="report-morning-topic-modal-field">
-              <span>可复用经验（建议问答对格式）</span>
-              <textarea
-                rows={5}
-                value={insightModal.reusableExperience}
-                onChange={(e) =>
-                  setInsightModal((m) => (m ? { ...m, reusableExperience: e.target.value } : m))
-                }
-                placeholder={REUSABLE_EXPERIENCE_PLACEHOLDER}
-              />
-            </label>
-            <div className="modal-actions">
-              <button type="button" className="ghost-btn" onClick={() => setInsightModal(null)}>
-                取消
-              </button>
-              <button
-                type="button"
-                className="primary-btn"
-                onClick={() => {
-                  patchTopic(insightModal.id, {
-                    finalConclusion: insightModal.finalConclusion.trim(),
-                    reusableExperience: insightModal.reusableExperience.trim(),
-                  });
-                  setInsightModal(null);
-                }}
-              >
-                保存
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       <DispatchTaskFromTopicDrawer
         open={dispatchTopic !== null}
