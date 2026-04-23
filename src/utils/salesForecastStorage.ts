@@ -12,6 +12,8 @@ import type {
 } from "./buildCustomerInboundDimensionFromAnalysis";
 import { migrateLegacySkusToModels } from "./buildCustomerInboundDimensionFromAnalysis";
 import type { OrderSegmentResult } from "./calculateOrderSegments";
+import type { StrongPatternNextQtyPrediction } from "./inboundStrongPatternNextQtyPrediction";
+import type { WeakPatternNextQtyPrediction } from "./inboundWeakPatternNextQtyPrediction";
 import type { SalesAnalysisBaseRow } from "./salesAnalysisBaseFromPreview";
 import type { MaterialTag, MaterialTagKind } from "./parseMaterialCode";
 
@@ -53,6 +55,12 @@ type PersistedV1 = {
   orderIntervalMeanComputeCompleted: boolean;
   /** 用户已跑过「生成周期性标签」分步汇总并成功保存；用于刷新后恢复绿底白字按钮态 */
   periodicityLabelsComputeCompleted: boolean;
+  /** 强周期「下一次量预测」结果；与 strongPatternNextQtyListSignature 同时有效 */
+  strongPatternNextQtyPredictions: Record<string, StrongPatternNextQtyPrediction>;
+  weakPatternNextQtyPredictions: Record<string, WeakPatternNextQtyPrediction>;
+  /** 与进货模式子卡片时间线一致的签名，用于判断持久化预测是否仍适用 */
+  strongPatternNextQtyListSignature: string;
+  weakPatternNextQtyListSignature: string;
 };
 
 export type SaveSalesForecastPersistedOptions = {
@@ -64,6 +72,12 @@ export type SaveSalesForecastPersistedOptions = {
   orderIntervalMeanComputeCompleted?: boolean;
   /** 为 true 表示本轮保存后应视为已跑完「生成周期性标签」；为 false 表示重置。不传则与本地已有值一致。 */
   periodicityLabelsComputeCompleted?: boolean;
+  /** 为 true 时清空强/弱周期下一次量预测及签名（如新 CSV、重拆底表、重算进货树等） */
+  clearInboundPatternNextQtyPredictions?: boolean;
+  strongPatternNextQtyPredictions?: Record<string, StrongPatternNextQtyPrediction>;
+  weakPatternNextQtyPredictions?: Record<string, WeakPatternNextQtyPrediction>;
+  strongPatternNextQtyListSignature?: string;
+  weakPatternNextQtyListSignature?: string;
 };
 
 const TAG_KINDS: MaterialTagKind[] = ["id", "model", "name", "spec", "grammage", "source"];
@@ -219,6 +233,58 @@ function isOrderSegmentResult(v: unknown): v is OrderSegmentResult {
   return true;
 }
 
+function isStrongPatternNextQtyPrediction(v: unknown): v is StrongPatternNextQtyPrediction {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  if (o.ok === false) return typeof o.reason === "string";
+  if (o.ok !== true) return false;
+  return (
+    typeof o.predictedQty === "number" &&
+    (o.mode === "logistics" || o.mode === "weighted") &&
+    typeof o.historicalMean === "number" &&
+    typeof o.historicalStdDev === "number" &&
+    typeof o.sampleCount === "number" &&
+    typeof o.predictionLogicZh === "string" &&
+    typeof o.hasDeviationWarning === "boolean"
+  );
+}
+
+function isWeakPatternNextQtyPrediction(v: unknown): v is WeakPatternNextQtyPrediction {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  if (o.ok === false) return typeof o.reason === "string";
+  if (o.ok !== true) return false;
+  if (o.kind === "mode") {
+    return (
+      typeof o.predictedQty === "number" &&
+      typeof o.predictionLogicZh === "string" &&
+      typeof o.timeDecayApplied === "boolean" &&
+      typeof o.sampleCount === "number"
+    );
+  }
+  if (o.kind === "interval") {
+    return (
+      typeof o.minVolume === "number" &&
+      typeof o.maxVolume === "number" &&
+      typeof o.predictionLogicZh === "string" &&
+      typeof o.timeDecayApplied === "boolean" &&
+      typeof o.sampleCount === "number"
+    );
+  }
+  return false;
+}
+
+function parsePredictionRecord<T>(raw: unknown, isEntry: (v: unknown) => v is T): Record<string, T> {
+  if (typeof raw !== "object" || raw === null) return {};
+  const o = raw as Record<string, unknown>;
+  const out: Record<string, T> = {};
+  for (const k of Object.keys(o)) {
+    const val = o[k];
+    if (isEntry(val)) out[k] = val;
+  }
+  return out;
+}
+
 function parsePersisted(raw: unknown): PersistedV1 | null {
   if (typeof raw !== "object" || raw === null) return null;
   const o = raw as Record<string, unknown>;
@@ -254,6 +320,19 @@ function parsePersisted(raw: unknown): PersistedV1 | null {
       .map(withDefaultOrderCountDeep);
   }
 
+  const strongPatternNextQtyPredictions = parsePredictionRecord(
+    o.strongPatternNextQtyPredictions,
+    isStrongPatternNextQtyPrediction,
+  );
+  const weakPatternNextQtyPredictions = parsePredictionRecord(
+    o.weakPatternNextQtyPredictions,
+    isWeakPatternNextQtyPrediction,
+  );
+  const strongPatternNextQtyListSignature =
+    typeof o.strongPatternNextQtyListSignature === "string" ? o.strongPatternNextQtyListSignature : "";
+  const weakPatternNextQtyListSignature =
+    typeof o.weakPatternNextQtyListSignature === "string" ? o.weakPatternNextQtyListSignature : "";
+
   return {
     v: 1,
     preview: {
@@ -268,6 +347,10 @@ function parsePersisted(raw: unknown): PersistedV1 | null {
     orderIntervalStdDevComputeCompleted: o.orderIntervalStdDevComputeCompleted === true,
     orderIntervalMeanComputeCompleted: o.orderIntervalMeanComputeCompleted === true,
     periodicityLabelsComputeCompleted: o.periodicityLabelsComputeCompleted === true,
+    strongPatternNextQtyPredictions,
+    weakPatternNextQtyPredictions,
+    strongPatternNextQtyListSignature,
+    weakPatternNextQtyListSignature,
   };
 }
 
@@ -306,6 +389,29 @@ export function saveSalesForecastPersisted(
     options?.periodicityLabelsComputeCompleted !== undefined
       ? options.periodicityLabelsComputeCompleted
       : (prev?.periodicityLabelsComputeCompleted ?? false);
+
+  const clearPred = options?.clearInboundPatternNextQtyPredictions === true;
+  const strongPatternNextQtyPredictions = clearPred
+    ? {}
+    : options?.strongPatternNextQtyPredictions !== undefined
+      ? options.strongPatternNextQtyPredictions
+      : (prev?.strongPatternNextQtyPredictions ?? {});
+  const weakPatternNextQtyPredictions = clearPred
+    ? {}
+    : options?.weakPatternNextQtyPredictions !== undefined
+      ? options.weakPatternNextQtyPredictions
+      : (prev?.weakPatternNextQtyPredictions ?? {});
+  const strongPatternNextQtyListSignature = clearPred
+    ? ""
+    : options?.strongPatternNextQtyListSignature !== undefined
+      ? options.strongPatternNextQtyListSignature
+      : (prev?.strongPatternNextQtyListSignature ?? "");
+  const weakPatternNextQtyListSignature = clearPred
+    ? ""
+    : options?.weakPatternNextQtyListSignature !== undefined
+      ? options.weakPatternNextQtyListSignature
+      : (prev?.weakPatternNextQtyListSignature ?? "");
+
   const payload: PersistedV1 = {
     v: 1,
     preview,
@@ -316,6 +422,10 @@ export function saveSalesForecastPersisted(
     orderIntervalStdDevComputeCompleted,
     orderIntervalMeanComputeCompleted,
     periodicityLabelsComputeCompleted,
+    strongPatternNextQtyPredictions,
+    weakPatternNextQtyPredictions,
+    strongPatternNextQtyListSignature,
+    weakPatternNextQtyListSignature,
   };
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));

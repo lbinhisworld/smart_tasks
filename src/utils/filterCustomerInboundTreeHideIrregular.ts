@@ -1,5 +1,6 @@
 /**
- * 按「周期性标签」首行是否「不规则」筛掉客户维树下各级节点，用于「隐藏不规则模式」。
+ * 按「周期性标签」首行是否「不规则」筛掉客户维树下「型号及以下」节点，用于「隐藏不规则模式」。
+ * 客户（总体）行不因本开关被隐藏，仍完整展示指标。
  */
 
 import type {
@@ -56,7 +57,7 @@ function filterModels(
 }
 
 /**
- * 在 `hide` 为真时，去掉首行为「不规则」的型号/品名/规格/克重节点。为假时原样返回同一引用，避免无意义拷贝。
+ * 在 `hide` 为真时，去掉首行为「不规则」的型号/品名/规格/克重节点（不作用于客户总体行）。为假时原样返回同一引用，避免无意义拷贝。
  */
 export function filterCustomerModelsForHideIrregular(
   models: readonly CustomerInboundModelRow[],

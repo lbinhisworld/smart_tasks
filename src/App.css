@@ -3602,20 +3602,6 @@ button.app-config-md-download.linkish {
   cursor: pointer;
 }
 
-.sales-customer-dim-irregular-hidden-metric {
-  flex: 0 0 var(--dim-metric-rail, min(56rem, 100%));
-  min-width: 0;
-  min-height: 2.2rem;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding-right: 2px;
-}
-
-.sales-customer-dim-irregular-hidden-metric .muted {
-  text-align: right;
-}
-
 .sales-customer-dim-tree {
   display: flex;
   flex-direction: column;
@@ -3713,6 +3699,36 @@ button.app-config-md-download.linkish {
   color: #64748b;
   font-weight: 500;
   flex-shrink: 0;
+}
+
+.sales-inbound-pattern-bucket-toolbar {
+  padding: 0 12px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.sales-inbound-pattern-predict-next-qty-btn {
+  margin: 0;
+  padding: 6px 12px;
+  border: 1px solid rgba(5, 150, 105, 0.45);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ecfdf5 0%, #d1fae5 100%);
+  color: #047857;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.sales-inbound-pattern-predict-next-qty-btn:hover {
+  background: linear-gradient(180deg, #d1fae5 0%, #a7f3d0 100%);
+  border-color: rgba(5, 150, 105, 0.65);
+  box-shadow: 0 1px 4px rgba(5, 150, 105, 0.2);
 }
 
 .sales-inbound-pattern-bucket .sales-inbound-pattern-list {
@@ -4262,6 +4278,39 @@ button.app-config-md-download.linkish {
   font-size: 0.9rem;
   line-height: 1.4;
   color: #0f172a;
+}
+
+.sales-inbound-pattern-next-qty-value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+
+.sales-inbound-pattern-prediction-logic-box {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.sales-inbound-pattern-prediction-logic-line,
+.sales-inbound-pattern-prediction-logic-warn {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: #0f172a;
+}
+
+.sales-inbound-pattern-prediction-logic-line + .sales-inbound-pattern-prediction-logic-line,
+.sales-inbound-pattern-prediction-logic-line + .sales-inbound-pattern-prediction-logic-warn,
+.sales-inbound-pattern-prediction-logic-warn + .sales-inbound-pattern-prediction-logic-line {
+  margin-top: 6px;
+}
+
+.sales-inbound-pattern-prediction-logic-warn {
+  font-weight: 600;
+  color: #b45309;
 }
 
 /* 公司级（每客户外框）：深蓝主题 + 悬停浮起阴影 */

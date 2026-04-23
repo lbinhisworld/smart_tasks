@@ -42,14 +42,19 @@ import {
   type CustomerInboundModelRow,
 } from "../utils/buildCustomerInboundDimensionFromAnalysis";
 import { decodeTextBytesAuto } from "../utils/decodeTextBytesAuto";
-import {
-  filterCustomerModelsForHideIrregular,
-  isIrregularPatternPeriodicity,
-} from "../utils/filterCustomerInboundTreeHideIrregular";
+import { filterCustomerModelsForHideIrregular } from "../utils/filterCustomerInboundTreeHideIrregular";
 import {
   listInboundPeriodicityPatterns,
   type InboundPeriodicityPatternItem,
 } from "../utils/inboundPeriodicityPatternMining";
+import {
+  predictNextOrderQuantityFromPurchaseTimeline,
+  type StrongPatternNextQtyPrediction,
+} from "../utils/inboundStrongPatternNextQtyPrediction";
+import {
+  predictNextOrderQuantityWeakPattern,
+  type WeakPatternNextQtyPrediction,
+} from "../utils/inboundWeakPatternNextQtyPrediction";
 import { formatCustomerPreviewName } from "../utils/formatCustomerPreviewName";
 import { parseCsvText } from "../utils/parseCsvText";
 import { MATERIAL_TAG_LEGEND } from "../utils/parseMaterialCode";
@@ -74,6 +79,45 @@ import {
   writeSalesForecastViewTab,
 } from "../utils/salesForecastStorage";
 import { CustomerDimLabelIcon } from "./CustomerDimLabelIcon";
+
+function inboundPatternListSignatureFromItems(patterns: InboundPeriodicityPatternItem[]): string {
+  return patterns
+    .map((p) => `${p.key}:${p.purchaseTimeline.map((n) => `${n.date}|${n.quantity}`).join(";")}`)
+    .join("§");
+}
+
+function splitInboundPatternsStrongWeak(all: InboundPeriodicityPatternItem[]) {
+  const strong: InboundPeriodicityPatternItem[] = [];
+  const weak: InboundPeriodicityPatternItem[] = [];
+  for (const p of all) {
+    const first = p.periodicityLabel.trim().split("\n")[0]?.trim();
+    if (first === "强周期性") strong.push(p);
+    else if (first === "弱周期性") weak.push(p);
+  }
+  return { strong, weak };
+}
+
+function hydrateInboundNextQtyPredictionsFromStored(
+  stored: NonNullable<ReturnType<typeof loadSalesForecastPersisted>>,
+): {
+  strong: Record<string, StrongPatternNextQtyPrediction>;
+  weak: Record<string, WeakPatternNextQtyPrediction>;
+} {
+  const dim = stored.customerInboundDimension;
+  const rows = stored.analysisBase?.rows;
+  if (!dim?.length || !rows?.length || !stored.periodicityLabelsComputeCompleted) {
+    return { strong: {}, weak: {} };
+  }
+  const all = listInboundPeriodicityPatterns(dim, rows);
+  const { strong, weak } = splitInboundPatternsStrongWeak(all);
+  const sigStrong = inboundPatternListSignatureFromItems(strong);
+  const sigWeak = inboundPatternListSignatureFromItems(weak);
+  const strongPred =
+    stored.strongPatternNextQtyListSignature === sigStrong ? stored.strongPatternNextQtyPredictions : {};
+  const weakPred =
+    stored.weakPatternNextQtyListSignature === sigWeak ? stored.weakPatternNextQtyPredictions : {};
+  return { strong: strongPred, weak: weakPred };
+}
 
 const CSV_ACCEPT = ".csv,text/csv";
 
@@ -147,7 +191,15 @@ function InboundPatternProductParamTags({ item }: { item: InboundPeriodicityPatt
   );
 }
 
-function InboundPatternSubcardView({ p }: { p: InboundPeriodicityPatternItem }) {
+function InboundPatternSubcardView({
+  p,
+  strongNextQtyPrediction = null,
+  weakNextQtyPrediction = null,
+}: {
+  p: InboundPeriodicityPatternItem;
+  strongNextQtyPrediction?: StrongPatternNextQtyPrediction | null;
+  weakNextQtyPrediction?: WeakPatternNextQtyPrediction | null;
+}) {
   const isStrong = p.periodicityLabel.trim().split("\n")[0]?.trim() === "强周期性";
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [drawerEntered, setDrawerEntered] = useState(false);
@@ -243,6 +295,80 @@ function InboundPatternSubcardView({ p }: { p: InboundPeriodicityPatternItem }) 
             <dt>对应平均下单量</dt>
             <dd>{p.avgOrderQty}</dd>
           </div>
+          {isStrong && strongNextQtyPrediction !== null ? (
+            <>
+              <div className="sales-inbound-pattern-row--inline">
+                <dt>下一次量预测</dt>
+                <dd>
+                  {strongNextQtyPrediction.ok ? (
+                    <span className="sales-inbound-pattern-next-qty-value">
+                      {strongNextQtyPrediction.predictedQty.toFixed(2)} 吨
+                    </span>
+                  ) : (
+                    <span className="muted small">— {strongNextQtyPrediction.reason}</span>
+                  )}
+                </dd>
+              </div>
+              <div className="sales-inbound-pattern-dl--param sales-inbound-pattern-dl--prediction-logic">
+                <dt>预测逻辑</dt>
+                <dd>
+                  {strongNextQtyPrediction.ok ? (
+                    <div className="sales-inbound-pattern-prediction-logic-box">
+                      <p className="sales-inbound-pattern-prediction-logic-line">
+                        {strongNextQtyPrediction.predictionLogicZh}
+                      </p>
+                      {strongNextQtyPrediction.hasDeviationWarning ? (
+                        <p className="sales-inbound-pattern-prediction-logic-warn">
+                          【注意】该客户需求量发生显著异动（预测相对历史均值偏离超过 30%）。
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <span className="muted small">—</span>
+                  )}
+                </dd>
+              </div>
+            </>
+          ) : null}
+          {!isStrong && weakNextQtyPrediction !== null ? (
+            <>
+              <div className="sales-inbound-pattern-row--inline">
+                <dt>下一次量预测</dt>
+                <dd>
+                  {weakNextQtyPrediction.ok ? (
+                    weakNextQtyPrediction.kind === "mode" ? (
+                      <span className="sales-inbound-pattern-next-qty-value">
+                        {weakNextQtyPrediction.predictedQty.toFixed(2)} 吨
+                      </span>
+                    ) : (
+                      <span className="sales-inbound-pattern-next-qty-value">
+                        {weakNextQtyPrediction.minVolume.toFixed(2)} ～{" "}
+                        {weakNextQtyPrediction.maxVolume.toFixed(2)} 吨
+                      </span>
+                    )
+                  ) : (
+                    <span className="muted small">— {weakNextQtyPrediction.reason}</span>
+                  )}
+                </dd>
+              </div>
+              <div className="sales-inbound-pattern-dl--param sales-inbound-pattern-dl--prediction-logic">
+                <dt>预测逻辑</dt>
+                <dd>
+                  {weakNextQtyPrediction.ok ? (
+                    <div className="sales-inbound-pattern-prediction-logic-box">
+                      {weakNextQtyPrediction.predictionLogicZh.split("\n").map((line, i) => (
+                        <p key={i} className="sales-inbound-pattern-prediction-logic-line">
+                          {line}
+                        </p>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="muted small">—</span>
+                  )}
+                </dd>
+              </div>
+            </>
+          ) : null}
         </dl>
       </div>
       {timelineOpen
@@ -825,6 +951,22 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
   );
   const [inboundPatternStrongSectionOpen, setInboundPatternStrongSectionOpen] = useState(true);
   const [inboundPatternWeakSectionOpen, setInboundPatternWeakSectionOpen] = useState(true);
+  const [strongPatternNextQtyPredictions, setStrongPatternNextQtyPredictions] = useState<
+    Record<string, StrongPatternNextQtyPrediction>
+  >(() => {
+    const stored = loadSalesForecastPersisted();
+    if (!stored) return {};
+    return hydrateInboundNextQtyPredictionsFromStored(stored).strong;
+  });
+  const [weakPatternNextQtyPredictions, setWeakPatternNextQtyPredictions] = useState<
+    Record<string, WeakPatternNextQtyPrediction>
+  >(() => {
+    const stored = loadSalesForecastPersisted();
+    if (!stored) return {};
+    return hydrateInboundNextQtyPredictionsFromStored(stored).weak;
+  });
+  const prevStrongPatternListSigRef = useRef<string | null>(null);
+  const prevWeakPatternListSigRef = useRef<string | null>(null);
   const [customerInboundCardCollapsed, setCustomerInboundCardCollapsed] = useState(false);
   /** 与「已生成周期标签」同步：有完成态时默认可为 true，生成成功后强制 true */
   const [hideIrregularPatterns, setHideIrregularPatterns] = useState(
@@ -863,6 +1005,11 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     setOrderIntervalStdDevComputeSuccess(stored.orderIntervalStdDevComputeCompleted);
     setOrderIntervalMeanComputeSuccess(stored.orderIntervalMeanComputeCompleted);
     setPeriodicityLabelsComputeSuccess(stored.periodicityLabelsComputeCompleted);
+    const hy = hydrateInboundNextQtyPredictionsFromStored(stored);
+    setStrongPatternNextQtyPredictions(hy.strong);
+    setWeakPatternNextQtyPredictions(hy.weak);
+    prevStrongPatternListSigRef.current = null;
+    prevWeakPatternListSigRef.current = null;
   }, [active]);
 
   useEffect(() => {
@@ -877,6 +1024,8 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
       setOrderIntervalMeanComputeSuccess(false);
       setPeriodicityLabelsComputeSuccess(false);
       setHideIrregularPatterns(false);
+      setStrongPatternNextQtyPredictions({});
+      setWeakPatternNextQtyPredictions({});
     }
   }, [analysisBase]);
 
@@ -956,6 +1105,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
             orderIntervalStdDevComputeCompleted: false,
             orderIntervalMeanComputeCompleted: false,
             periodicityLabelsComputeCompleted: false,
+            clearInboundPatternNextQtyPredictions: true,
           })
         ) {
           setError("数据已显示，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复。");
@@ -1004,6 +1154,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
         orderIntervalStdDevComputeCompleted: false,
         orderIntervalMeanComputeCompleted: false,
         periodicityLabelsComputeCompleted: false,
+        clearInboundPatternNextQtyPredictions: true,
       })
     ) {
       setError("底表已生成，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复底表。");
@@ -1088,6 +1239,7 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
               orderIntervalStdDevComputeCompleted: false,
               orderIntervalMeanComputeCompleted: false,
               periodicityLabelsComputeCompleted: false,
+              clearInboundPatternNextQtyPredictions: true,
             })
           ) {
             setError("进货周期性分析已生成，但写入本地存储失败（可能超出浏览器配额）。刷新后可能无法恢复。");
@@ -1448,6 +1600,90 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
     }
     return { inboundPatternsStrong: strong, inboundPatternsWeak: weak, customerNamesWithPeriodicHighlight };
   }, [analysisBase, customerInboundDimension, periodicityLabelsComputeSuccess]);
+
+  const strongPatternListSignature = useMemo(
+    () => inboundPatternListSignatureFromItems(inboundPatternsStrong),
+    [inboundPatternsStrong],
+  );
+
+  useEffect(() => {
+    if (prevStrongPatternListSigRef.current === null) {
+      prevStrongPatternListSigRef.current = strongPatternListSignature;
+      return;
+    }
+    if (prevStrongPatternListSigRef.current === strongPatternListSignature) return;
+    prevStrongPatternListSigRef.current = strongPatternListSignature;
+    setStrongPatternNextQtyPredictions({});
+    if (preview && analysisBase) {
+      void saveSalesForecastPersisted(preview, analysisBase, orderSegments, customerInboundDimension, {
+        strongPatternNextQtyPredictions: {},
+        strongPatternNextQtyListSignature: strongPatternListSignature,
+      });
+    }
+  }, [
+    strongPatternListSignature,
+    preview,
+    analysisBase,
+    orderSegments,
+    customerInboundDimension,
+  ]);
+
+  const weakPatternListSignature = useMemo(
+    () => inboundPatternListSignatureFromItems(inboundPatternsWeak),
+    [inboundPatternsWeak],
+  );
+
+  useEffect(() => {
+    if (prevWeakPatternListSigRef.current === null) {
+      prevWeakPatternListSigRef.current = weakPatternListSignature;
+      return;
+    }
+    if (prevWeakPatternListSigRef.current === weakPatternListSignature) return;
+    prevWeakPatternListSigRef.current = weakPatternListSignature;
+    setWeakPatternNextQtyPredictions({});
+    if (preview && analysisBase) {
+      void saveSalesForecastPersisted(preview, analysisBase, orderSegments, customerInboundDimension, {
+        weakPatternNextQtyPredictions: {},
+        weakPatternNextQtyListSignature: weakPatternListSignature,
+      });
+    }
+  }, [
+    weakPatternListSignature,
+    preview,
+    analysisBase,
+    orderSegments,
+    customerInboundDimension,
+  ]);
+
+  const runStrongNextQtyPrediction = useCallback(() => {
+    const next: Record<string, StrongPatternNextQtyPrediction> = {};
+    for (const p of inboundPatternsStrong) {
+      next[p.key] = predictNextOrderQuantityFromPurchaseTimeline(p.purchaseTimeline);
+    }
+    setStrongPatternNextQtyPredictions(next);
+    const sig = inboundPatternListSignatureFromItems(inboundPatternsStrong);
+    if (preview && analysisBase) {
+      void saveSalesForecastPersisted(preview, analysisBase, orderSegments, customerInboundDimension, {
+        strongPatternNextQtyPredictions: next,
+        strongPatternNextQtyListSignature: sig,
+      });
+    }
+  }, [inboundPatternsStrong, preview, analysisBase, orderSegments, customerInboundDimension]);
+
+  const runWeakNextQtyPrediction = useCallback(() => {
+    const next: Record<string, WeakPatternNextQtyPrediction> = {};
+    for (const p of inboundPatternsWeak) {
+      next[p.key] = predictNextOrderQuantityWeakPattern(p);
+    }
+    setWeakPatternNextQtyPredictions(next);
+    const sig = inboundPatternListSignatureFromItems(inboundPatternsWeak);
+    if (preview && analysisBase) {
+      void saveSalesForecastPersisted(preview, analysisBase, orderSegments, customerInboundDimension, {
+        weakPatternNextQtyPredictions: next,
+        weakPatternNextQtyListSignature: sig,
+      });
+    }
+  }, [inboundPatternsWeak, preview, analysisBase, orderSegments, customerInboundDimension]);
 
   return (
     <div className="sales-forecast-page">
@@ -2051,8 +2287,6 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
               );
               const listEmptyByFilter =
                 applyHideIrreg && row.models.length > 0 && visibleModels.length === 0;
-              const hideTotalMetrics =
-                applyHideIrreg && isIrregularPatternPeriodicity(row.periodicityLabel);
               /** 与「进货周期性模式挖掘」同源：该客户在树中任一路径（含总体）被纳入强/弱挖掘结果 */
               const showPeriodicDiscoveryHighlight = customerNamesWithPeriodicHighlight.has(row.customerName);
               return (
@@ -2092,23 +2326,14 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                           </button>
                         </div>
                         <div className="sales-customer-dim-level-metric-wrap">
-                          {!hideTotalMetrics ? (
-                            <CustomerDimMetricGrid
-                              lastOrderDate={row.lastOrderDate}
-                              orderCount={row.orderCount}
-                              orderIntervalStdDev={row.orderIntervalStdDev}
-                              orderIntervalMean={row.orderIntervalMean}
-                              periodicityLabel={row.periodicityLabel}
-                              alignStrip
-                            />
-                          ) : (
-                            <div
-                              className="sales-customer-dim-irregular-hidden-metric"
-                              role="note"
-                            >
-                              <span className="muted small">总体为不规则，已按开关隐藏</span>
-                            </div>
-                          )}
+                          <CustomerDimMetricGrid
+                            lastOrderDate={row.lastOrderDate}
+                            orderCount={row.orderCount}
+                            orderIntervalStdDev={row.orderIntervalStdDev}
+                            orderIntervalMean={row.orderIntervalMean}
+                            periodicityLabel={row.periodicityLabel}
+                            alignStrip
+                          />
                         </div>
                       </div>
                     </div>
@@ -2164,6 +2389,17 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                       （{inboundPatternsStrong.length}）
                     </span>
                   </button>
+                  {inboundPatternsStrong.length > 0 ? (
+                    <div className="sales-inbound-pattern-bucket-toolbar">
+                      <button
+                        type="button"
+                        className="sales-inbound-pattern-predict-next-qty-btn"
+                        onClick={runStrongNextQtyPrediction}
+                      >
+                        预测下一次下单量
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
                 {inboundPatternStrongSectionOpen ? (
                   inboundPatternsStrong.length === 0 ? (
@@ -2177,7 +2413,11 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                       aria-labelledby="inbound-pattern-strong-section-toggle"
                     >
                       {inboundPatternsStrong.map((p) => (
-                        <InboundPatternSubcardView key={p.key} p={p} />
+                        <InboundPatternSubcardView
+                          key={p.key}
+                          p={p}
+                          strongNextQtyPrediction={strongPatternNextQtyPredictions[p.key] ?? null}
+                        />
                       ))}
                     </div>
                   )
@@ -2203,6 +2443,17 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                       （{inboundPatternsWeak.length}）
                     </span>
                   </button>
+                  {inboundPatternsWeak.length > 0 ? (
+                    <div className="sales-inbound-pattern-bucket-toolbar">
+                      <button
+                        type="button"
+                        className="sales-inbound-pattern-predict-next-qty-btn"
+                        onClick={runWeakNextQtyPrediction}
+                      >
+                        预测下一次下单量
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
                 {inboundPatternWeakSectionOpen ? (
                   inboundPatternsWeak.length === 0 ? (
@@ -2216,7 +2467,11 @@ export function SalesForecast({ active = true }: SalesForecastProps) {
                       aria-labelledby="inbound-pattern-weak-section-toggle"
                     >
                       {inboundPatternsWeak.map((p) => (
-                        <InboundPatternSubcardView key={p.key} p={p} />
+                        <InboundPatternSubcardView
+                          key={p.key}
+                          p={p}
+                          weakNextQtyPrediction={weakPatternNextQtyPredictions[p.key] ?? null}
+                        />
                       ))}
                     </div>
                   )
