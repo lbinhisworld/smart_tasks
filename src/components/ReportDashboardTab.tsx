@@ -1,10 +1,9 @@
 /**
- * @fileoverview 首页「报告看板」Tab：按提取日展示集团 / 分公司 / 车间三级产量树与 KPI 瓷片，并驱动原文引用侧栏与跳转历史。
+ * @fileoverview 首页「报告看板」Tab：按提取日展示集团 / 分公司 / 车间三级产量树与 KPI 瓷片，并驱动原文引用侧栏。
  *
  * **设计要点**
- * - 数据来自 `buildDayCapacityDashboard`；日期轴选项来自 `buildTimelineGroups` 的日期键。
- * - 点击指标瓷片调用 `openCitation`：优先用提取记录 `quantitativeMetricCitations` 中对应行的 `excerpt`；否则回退 `buildQuotedCitationExcerpt`；高亮区间为多段（与引用提取表一致）。
- * - 「跳转原文」委托 `requestJumpToExtractionHistory`，与 `ReportManagement` 中 `sessionStorage` 消费配合。
+ * - 数据来自 `buildDayCapacityDashboard`；日期轴选项来自 `buildTimelineGroups` 的日期键；提取日筛选使用自定义月历，有历史数据的日期标绿。
+ * - 点击指标瓷片调用 `openCitation`：车间级用单条摘录；集团/分公司**加总**指标用 `buildAggregatedDashboardCitation` 合并各车间下级摘录与高亮。
  *
  * @module ReportDashboardTab
  */
@@ -19,17 +18,19 @@ import {
   type WorkshopDayMetrics,
 } from "../utils/productionDashboardMetrics";
 import {
+  buildAggregatedDashboardCitation,
   buildQuotedCitationExcerpt,
   CITATION_METRIC_LABELS,
   type CitationMetricId,
+  findHighlightRangeInQuoted,
   pickHistorySourceItem,
-  requestJumpToExtractionHistory,
   type ReportCitationPayload,
   tryBuildCitationFromStoredQuantitative,
 } from "../utils/reportCitation";
 import { formatExtractionDate } from "../utils/llmExtract";
 import { reportDashboardLevel1ScopeLabel } from "../utils/leaderPerspective";
 import { ReportCitationDrawer } from "./ReportCitationDrawer";
+import { ReportDashboardDateField } from "./ReportDashboardDateField";
 
 function formatRate(p: number | null): string {
   if (p == null || !Number.isFinite(p)) return "暂无";
@@ -117,25 +118,6 @@ function buildCitationHighlightPhrases(metric: CitationMetricId, snap: CapacityM
   }
 
   return [...new Set(phrases)];
-}
-
-function findHighlightRangeInQuoted(
-  quoted: string,
-  phrases: string[],
-): { start: number; end: number } | null {
-  if (phrases.length === 0) return null;
-  const sorted = [...phrases].sort((a, b) => b.length - a.length);
-  for (const p of sorted) {
-    const i = quoted.indexOf(p);
-    if (i >= 0) return { start: i, end: i + p.length };
-  }
-  for (const p of sorted) {
-    const noComma = p.replace(/,/g, "");
-    if (noComma === p) continue;
-    const i = quoted.indexOf(noComma);
-    if (i >= 0) return { start: i, end: i + noComma.length };
-  }
-  return null;
 }
 
 function MetricTiles({
@@ -306,6 +288,56 @@ export function ReportDashboardTab({
       const companyName =
         ctx.level === 1 ? null : ctx.companyName != null ? ctx.companyName : null;
       const workshopName = ctx.level === 3 ? ctx.workshopName ?? null : null;
+
+      if (ctx.level === 1 || ctx.level === 2) {
+        const segments =
+          ctx.level === 1
+            ? model.companies.flatMap((c) =>
+                c.workshops.map((w) => ({
+                  companyName: c.companyName,
+                  workshopName: w.workshopName,
+                  highlightPhrases: buildCitationHighlightPhrases(
+                    metric,
+                    aggregateWorkshopMetrics([w]),
+                  ),
+                })),
+              )
+            : model.companies
+                .filter((c) => c.companyName === ctx.companyName)
+                .flatMap((c) =>
+                  c.workshops.map((w) => ({
+                    companyName: c.companyName,
+                    workshopName: w.workshopName,
+                    highlightPhrases: buildCitationHighlightPhrases(
+                      metric,
+                      aggregateWorkshopMetrics([w]),
+                    ),
+                  })),
+                );
+
+        if (segments.length > 0) {
+          const agg = buildAggregatedDashboardCitation(history, viewDate, metric, segments, {
+            scope: ctx.level === 1 ? "group" : "company",
+          });
+          if (agg) {
+            const displayCompany =
+              ctx.level === 1 ? "全集团汇总" : ctx.companyName ?? "—";
+            setCitationPayload({
+              viewDate,
+              displayCompany,
+              metricLabel: CITATION_METRIC_LABELS[metric],
+              quotedExcerpt: agg.quotedExcerpt,
+              sourceItemId: agg.sourceItemId,
+              jumpNeedle: agg.jumpNeedle,
+              citationHighlightRanges: agg.citationHighlightRanges,
+            });
+            setCitationOpen(true);
+            setCitationCollapsed(false);
+            return;
+          }
+        }
+      }
+
       const highlightPhrases = buildCitationHighlightPhrases(metric, snap);
       const source = pickHistorySourceItem(history, viewDate, companyName, workshopName, highlightPhrases);
       const text = source?.originalText ?? "";
@@ -346,25 +378,19 @@ export function ReportDashboardTab({
       setCitationOpen(true);
       setCitationCollapsed(false);
     },
-    [history, viewDate],
+    [history, viewDate, model],
   );
-
-  const handleJumpToHistory = useCallback(() => {
-    if (!citationPayload?.sourceItemId) return;
-    requestJumpToExtractionHistory(citationPayload.sourceItemId, citationPayload.jumpNeedle);
-  }, [citationPayload]);
 
   return (
     <div className="report-dashboard-tab">
       <div className="report-dash-toolbar">
         <label className="report-dash-date-label">
           <span className="muted small">当日视角（提取日期）</span>
-          <input
-            type="date"
-            className="fld report-dash-date-input"
+          <ReportDashboardDateField
             value={viewDate}
-            onChange={(e) => {
-              setViewDate(e.target.value);
+            datesWithData={timelineDates}
+            onChange={(iso) => {
+              setViewDate(iso);
               setCompaniesOpen(false);
               setOpenCompany(null);
             }}
@@ -496,7 +522,6 @@ export function ReportDashboardTab({
         }}
         onCollapse={() => setCitationCollapsed(true)}
         onExpand={() => setCitationCollapsed(false)}
-        onJump={handleJumpToHistory}
       />
     </div>
   );

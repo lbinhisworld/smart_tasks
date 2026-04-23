@@ -49,7 +49,6 @@ function renderQuotedWithCitationHighlights(quoted: string, ranges: { start: num
 /**
  * @param open - 是否挂载遮罩与面板（无 payload 时内部不展示内容）
  * @param collapsed - 窄条折叠态，仍保持 `open` 为 true
- * @param onJump - 用户确认跳转至提取历史（父级应调用 `requestJumpToExtractionHistory`）
  */
 export function ReportCitationDrawer({
   open,
@@ -58,7 +57,6 @@ export function ReportCitationDrawer({
   onClose,
   onCollapse,
   onExpand,
-  onJump,
 }: {
   open: boolean;
   collapsed: boolean;
@@ -66,7 +64,6 @@ export function ReportCitationDrawer({
   onClose: () => void;
   onCollapse: () => void;
   onExpand: () => void;
-  onJump: () => void;
 }) {
   const [panelIn, setPanelIn] = useState(false);
   const [backdropIn, setBackdropIn] = useState(false);
@@ -172,17 +169,6 @@ export function ReportCitationDrawer({
                 payload.citationHighlightRanges ?? [],
               )}
             </blockquote>
-            <div className="report-citation-actions">
-              <button
-                type="button"
-                className="primary-btn"
-                disabled={!payload.sourceItemId}
-                onClick={onJump}
-                title={payload.sourceItemId ? "打开报告管理并定位到该条历史" : "未找到对应历史记录"}
-              >
-                跳转原文
-              </button>
-            </div>
           </div>
         )}
         {collapsed && (

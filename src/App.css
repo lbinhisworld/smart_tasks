@@ -1761,6 +1761,140 @@ button.linkish:hover {
   min-width: 160px;
 }
 
+.report-dash-date-field {
+  position: relative;
+  display: inline-block;
+}
+
+.report-dash-date-field-trigger {
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.report-dash-cal-popover {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 50;
+  min-width: 280px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+}
+
+.report-dash-cal-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.report-dash-cal-nav-btn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: #f8fafc;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  color: #334155;
+}
+
+.report-dash-cal-nav-btn:hover {
+  background: #f1f5f9;
+}
+
+.report-dash-cal-month-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #0f172a;
+}
+
+.report-dash-cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.report-dash-cal-weekday {
+  text-align: center;
+  font-size: 0.72rem;
+  color: #64748b;
+  padding: 2px 0;
+}
+
+.report-dash-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.report-dash-cal-cell--empty {
+  min-height: 36px;
+}
+
+.report-dash-cal-day {
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 0.9rem;
+  cursor: pointer;
+  color: #0f172a;
+}
+
+.report-dash-cal-day:hover {
+  background: #f1f5f9;
+}
+
+/* 有提取历史数据的日期：绿色圆环圈住数字（非选中态） */
+.report-dash-cal-day--has-data:not(.report-dash-cal-day--selected) {
+  align-self: center;
+  justify-self: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #16a34a;
+  border-radius: 50%;
+  color: #15803d;
+  font-weight: 600;
+  background: transparent;
+}
+
+.report-dash-cal-day--has-data:not(.report-dash-cal-day--selected):hover {
+  background: rgba(22, 163, 74, 0.1);
+  border-color: #15803d;
+}
+
+.report-dash-cal-day--today:not(.report-dash-cal-day--selected):not(.report-dash-cal-day--has-data) {
+  border-color: #cbd5e1;
+}
+
+.report-dash-cal-day--selected {
+  background: var(--accent, #2563eb);
+  color: #fff;
+  font-weight: 600;
+  border-radius: 8px;
+}
+
+/* 当前选中且该日有数据：蓝底上叠一层绿色圆环，便于与仅选中区分 */
+.report-dash-cal-day--selected.report-dash-cal-day--has-data {
+  color: #fff;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #16a34a;
+}
+
 .report-dash-date-hint {
   flex: 1;
   min-width: 200px;
@@ -7263,6 +7397,25 @@ button.app-config-md-download.linkish {
   color: #991b1b;
 }
 
+/* 报告提取：两主按钮在整段逻辑成功跑完后绿底白字（与销售「计算完成」态一致） */
+.ghost-btn.tiny-btn.report-mgmt-action-btn--done {
+  background: #16a34a;
+  color: #fff;
+  border-color: #15803d;
+}
+.ghost-btn.tiny-btn.report-mgmt-action-btn--done:hover:not(:disabled) {
+  background: #22c55e;
+  color: #fff;
+  border-color: #16a34a;
+}
+.ghost-btn.tiny-btn.report-mgmt-action-btn--done:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+  background: #16a34a;
+  color: #fff;
+  border-color: #15803d;
+}
+
 /* 报告提取预览：顶栏 + 多任务卡 + 每卡内三步 Tab（箭头色块） */
 .report-preview-global-head {
   margin-bottom: 4px;
@@ -8360,7 +8513,7 @@ button.app-config-md-download.linkish {
 }
 
 .report-citation-quote {
-  margin: 0 0 20px;
+  margin: 0;
   padding: 12px 14px;
   border-left: 4px solid rgba(37, 99, 235, 0.65);
   border-radius: 0 12px 12px 0;
@@ -8397,14 +8550,6 @@ button.app-config-md-download.linkish {
   border-radius: 4px;
   background: rgba(254, 226, 226, 0.65);
   animation: report-citation-quote-num-pulse 1.05s ease-in-out infinite;
-}
-
-.report-citation-actions {
-  margin-top: auto;
-}
-
-.report-citation-actions .primary-btn {
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
 }
 
 .report-citation-drawer-expand-tab {

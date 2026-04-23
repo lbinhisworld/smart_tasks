@@ -289,7 +289,7 @@ export function ExtractionHistoryList({
             </div>
           )}
         </div>
-        <p className="muted small">解析成功后点击「保存」，记录将出现在此处。</p>
+        <p className="muted small">解析成功后，在报告提取区点击「保存并更新现有任务进度」并完成一轮，当前报告将自动写入此处。</p>
       </section>
     );
   }

@@ -1,5 +1,5 @@
 /**
- * @fileoverview 首页数据看板：任务 / 报告 / 销售 / 人事（人才池）四 Tab；销售 Tab 内含订单分布与复购预测子 Tab；报告 Tab 切换时刷新 `loadExtractionHistory`。
+ * @fileoverview 首页数据看板：任务 / 报告 / 销售 / 人事（人才池）四 Tab；销售 Tab 内含订单分布与复购预测子 Tab；报告数据在 Tab 切换、`visibilitychange` 与 `EXTRACTION_HISTORY_CHANGED_EVENT` 时与 `loadExtractionHistory` 同步。
  *
  * @module Dashboard
  */
@@ -8,7 +8,10 @@ import { useEffect, useMemo, useState } from "react";
 import { TASK_CATEGORY_LEVEL1_LIST } from "../data/taskCategories";
 import { useTasks } from "../context/TaskContext";
 import { extractionHistoryVisibleForPerspective } from "../utils/leaderPerspective";
-import { loadExtractionHistory } from "../utils/extractionHistoryStorage";
+import {
+  EXTRACTION_HISTORY_CHANGED_EVENT,
+  loadExtractionHistory,
+} from "../utils/extractionHistoryStorage";
 import { riskForTask, riskLabel } from "../utils/risk";
 import { isIsoDateString } from "../utils/taskDueDate";
 import { Donut } from "./Donut";
@@ -55,6 +58,12 @@ export function Dashboard() {
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
+  useEffect(() => {
+    const onHistoryChanged = () => setReportHistory(loadExtractionHistory());
+    window.addEventListener(EXTRACTION_HISTORY_CHANGED_EVENT, onHistoryChanged);
+    return () => window.removeEventListener(EXTRACTION_HISTORY_CHANGED_EVENT, onHistoryChanged);
   }, []);
 
   const filteredReportHistory = useMemo(

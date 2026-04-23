@@ -86,6 +86,8 @@ export interface ReportDailyListPanelProps {
   onAddToTopic?: (payload: DailyTopicDraftPayload) => void;
   /** 高亮存储更新后递增，用于重新读取 localStorage */
   highlightNonce?: number;
+  /** 由报告提取侧递增时触发与「刷新数据」相同的在线拉取（Tab 隐藏时仍生效） */
+  refreshNonce?: number;
 }
 
 /**
@@ -137,7 +139,11 @@ function buildDetailPreChildren(text: string, spans: DailyReportHighlightSpan[])
   return out.length > 0 ? out : [text || "（空）"];
 }
 
-export function ReportDailyListPanel({ onAddToTopic, highlightNonce = 0 }: ReportDailyListPanelProps) {
+export function ReportDailyListPanel({
+  onAddToTopic,
+  highlightNonce = 0,
+  refreshNonce = 0,
+}: ReportDailyListPanelProps) {
   const [profiles, setProfiles] = useState<ExternalApiProfile[]>([]);
   const [profileId, setProfileId] = useState<string>(() => readPreferredDailyListProfileId() ?? "");
   const [filters, setFilters] = useState<DailyReportListFilters>(() => initialFilters());
@@ -241,7 +247,7 @@ export function ReportDailyListPanel({ onAddToTopic, highlightNonce = 0 }: Repor
   /**
    * 与数据中台当前接口「发送测试请求」一致：在线拉取并写入会话缓存，再刷新本页表格。
    */
-  const handleRefreshData = async () => {
+  const handleRefreshData = useCallback(async () => {
     setRefreshError(null);
     if (!profileId) {
       window.alert("请先在下拉中选择数据源接口（或到「数据中台」配置接口）。");
@@ -279,7 +285,18 @@ export function ReportDailyListPanel({ onAddToTopic, highlightNonce = 0 }: Repor
     } finally {
       setRefreshing(false);
     }
-  };
+  }, [profileId, profiles, reloadHubState]);
+
+  const lastExternalRefreshNonceRef = useRef(0);
+  /** 报告提取「保存并更新现有任务进度」联动：须等 profile 就绪后再拉取，且勿在早退时消费 nonce（否则永不重试）。 */
+  useEffect(() => {
+    const n = refreshNonce;
+    if (n <= 0 || n <= lastExternalRefreshNonceRef.current) return;
+    if (!profileId.trim() || profiles.length === 0) return;
+
+    lastExternalRefreshNonceRef.current = n;
+    void handleRefreshData();
+  }, [refreshNonce, profileId, profiles.length, handleRefreshData]);
 
   return (
     <section className="card report-tab-panel report-daily-list-panel">

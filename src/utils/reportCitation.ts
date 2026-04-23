@@ -5,7 +5,8 @@
  * - 看板侧栏优先展示已保存的 `quantitativeMetricCitations` 中与 KPI 对应的 `excerpt`（`tryBuildCitationFromStoredQuantitative`）；否则回退 `buildQuotedCitationExcerpt`。
  * - `buildQuotedCitationExcerpt`：若传入 `centerOnPhrases` 且在原文可命中，则以该段中心对齐摘录窗口，使点击的指标字面量落在引用中段；否则回退到车间/分公司锚点 + 指标关键词；`jumpNeedle` 须落在原文中。
  * - `pickHistorySourceItem`：同一提取日、同一分公司下可能有多条保存记录；**优先**保留 `originalText` 中含当前 KPI 字面量的条目；打分用正文**开头约 1500 字**解析日历日（避免正文深处「16 日检修」干扰），并与 `viewDate`、日期字面量、短语命中综合择优。
- * - `requestJumpToExtractionHistory`：`sessionStorage` 传递 `{ id, needle }`（同页路由切换不丢），再 `CustomEvent` 通知 `App` 打开报告页；与 `OPEN_REPORTS_PAGE_EVENT` / `EXTRACTION_FOCUS_STORAGE_KEY` 成对使用。
+ * - `buildAggregatedDashboardCitation`：看板**加总**指标（集团 / 分公司）点击时，按下属车间逐段拉取引用原文并拼接，高亮区间为各段在合并文中的偏移。
+ * - `requestJumpToExtractionHistory`：任务/待安排等场景跳转报告管理并定位历史；`sessionStorage` + `OPEN_REPORTS_PAGE_EVENT` / `EXTRACTION_FOCUS_STORAGE_KEY`。
  *
  * @module reportCitation
  */
@@ -247,6 +248,123 @@ function pickLongestPresentHintInText(text: string, hints: readonly string[]): s
  * @param opts.maxLen - 摘录最大字符数；传入 `centerOnPhrases` 时建议 ≥ 240 以便两侧上下文充足
  * @returns `quoted` 为带省略号的展示串；`jumpNeedle` **必须为原文中真实子串**，优先与点击指标字面量一致，供历史「原始数据」黄标与滚动定位
  */
+/** 回退摘录（带「。。。」包裹）内，用短语找红字高亮区间。 */
+export function findHighlightRangeInQuoted(
+  quoted: string,
+  phrases: readonly string[],
+): { start: number; end: number } | null {
+  if (phrases.length === 0) return null;
+  const sorted = [...phrases].map((p) => p.trim()).filter(Boolean).sort((a, b) => b.length - a.length);
+  for (const p of sorted) {
+    const i = quoted.indexOf(p);
+    if (i >= 0) return { start: i, end: i + p.length };
+  }
+  for (const p of sorted) {
+    const noComma = p.replace(/,/g, "");
+    if (noComma === p) continue;
+    const i = quoted.indexOf(noComma);
+    if (i >= 0) return { start: i, end: i + noComma.length };
+  }
+  return null;
+}
+
+const AGGREGATED_CITATION_BLOCK_SEP = "\n\n────────────────\n\n";
+
+/** 报告看板加总指标：每一下级车间一条摘录，用于「原文引用」合并展示。 */
+export type AggregatedCitationSegment = {
+  companyName: string;
+  workshopName: string;
+  highlightPhrases: readonly string[];
+};
+
+/**
+ * 将多个车间在「同一指标」下的引用摘录合并为一段侧栏正文。
+ */
+export function buildAggregatedDashboardCitation(
+  history: ExtractionHistoryItem[],
+  viewDate: string,
+  metric: CitationMetricId,
+  segments: AggregatedCitationSegment[],
+  opts: { scope: "group" | "company" },
+): {
+  quotedExcerpt: string;
+  citationHighlightRanges: { start: number; end: number }[];
+  sourceItemId: string | null;
+  jumpNeedle: string;
+} | null {
+  if (segments.length === 0) return null;
+
+  let acc = "";
+  const allRanges: { start: number; end: number }[] = [];
+  let primarySourceId: string | null = null;
+  let primaryJumpNeedle = "";
+
+  for (let i = 0; i < segments.length; i++) {
+    if (i > 0) acc += AGGREGATED_CITATION_BLOCK_SEP;
+    const seg = segments[i]!;
+    const header =
+      opts.scope === "group"
+        ? `【${seg.companyName} · ${seg.workshopName}】\n`
+        : `【${seg.workshopName}】\n`;
+    acc += header;
+    const bodyStart = acc.length;
+
+    const source = pickHistorySourceItem(
+      history,
+      viewDate,
+      seg.companyName,
+      seg.workshopName,
+      seg.highlightPhrases,
+    );
+    if (!source) {
+      acc += "（未找到该车间对应的提取记录或原文。）";
+      continue;
+    }
+    if (primarySourceId == null) primarySourceId = source.id;
+
+    const text = source.originalText ?? "";
+    const phrases = [...seg.highlightPhrases];
+    const stored = tryBuildCitationFromStoredQuantitative(source, metric, seg.workshopName, phrases);
+    let body: string;
+    let localRanges: { start: number; end: number }[];
+    let needle: string;
+    if (stored) {
+      body = stored.quotedExcerpt;
+      localRanges = stored.citationHighlightRanges.map((r) => ({
+        start: bodyStart + r.start,
+        end: bodyStart + r.end,
+      }));
+      needle = stored.jumpNeedle;
+    } else {
+      const { quoted, jumpNeedle } = buildQuotedCitationExcerpt(text, {
+        metric,
+        workshopName: seg.workshopName,
+        companyName: seg.companyName,
+        centerOnPhrases: phrases,
+        maxLen: 280,
+        viewDate,
+      });
+      body = quoted;
+      const single = findHighlightRangeInQuoted(quoted, phrases);
+      localRanges = single ? [{ start: bodyStart + single.start, end: bodyStart + single.end }] : [];
+      needle = jumpNeedle;
+    }
+    if (!primaryJumpNeedle) primaryJumpNeedle = needle;
+    acc += body;
+    allRanges.push(...localRanges);
+  }
+
+  const trimmed = acc.trim();
+  if (!trimmed) return null;
+
+  return {
+    quotedExcerpt: acc,
+    citationHighlightRanges: mergeExcerptHighlightRanges(allRanges),
+    sourceItemId: primarySourceId,
+    jumpNeedle: primaryJumpNeedle || "计划值",
+  };
+}
+
 export function buildQuotedCitationExcerpt(
   originalText: string,
   opts: {

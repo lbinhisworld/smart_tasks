@@ -27,6 +27,14 @@ const STORAGE_KEY = "qifeng_extraction_history_v1";
 /** 本地保存条数上限（追加与导入均适用） */
 export const MAX_HISTORY_ITEMS = 200;
 
+/** 提取历史写入 localStorage 后派发，供数据看板「报告」Tab 等与磁盘同步（同页不卸载时 otherwise 仍为旧 state）。 */
+export const EXTRACTION_HISTORY_CHANGED_EVENT = "qifeng-extraction-history-changed";
+
+export function notifyExtractionHistoryChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(EXTRACTION_HISTORY_CHANGED_EVENT));
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -342,6 +350,7 @@ export function appendExtractionHistory(item: ExtractionHistoryItem): Extraction
   const next = [item, ...prev].slice(0, MAX_HISTORY_ITEMS);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   rebuildReportDynamicMemoryFromHistory(next);
+  notifyExtractionHistoryChanged();
   return next;
 }
 
@@ -350,6 +359,7 @@ export function removeExtractionHistoryItem(id: string): ExtractionHistoryItem[]
   const next = loadExtractionHistory().filter((x) => x.id !== id);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   rebuildReportDynamicMemoryFromHistory(next);
+  notifyExtractionHistoryChanged();
   return next;
 }
 
@@ -361,5 +371,6 @@ export function replaceExtractionHistory(items: ExtractionHistoryItem[]): Extrac
   const next = items.slice(0, MAX_HISTORY_ITEMS);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   rebuildReportDynamicMemoryFromHistory(next);
+  notifyExtractionHistoryChanged();
   return next;
 }

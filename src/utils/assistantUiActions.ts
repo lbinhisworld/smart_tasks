@@ -32,7 +32,7 @@ export type AssistantReportParseRequest = {
   /** 为 true 时解析结束后向助手派发 `ASSISTANT_REPORT_PARSE_RESULT_EVENT` */
   assistantChatFollowup?: boolean;
   /**
-   * 为 true 且单卡解析成功时：在环节 1 完成后**自动顺序**执行环节 2（更新现有任务进度）、环节 3（仅拆解日报计划为任务表，不自动写入任务；须用户在报告提取侧栏点「生成任务」）。
+   * 为 true 且单卡解析成功时：在环节 1 完成后**自动顺序**执行环节 2（同「保存并更新现有任务进度」的进度推断，quiet 模式不写入提取历史、不刷新日报列表）、环节 3（仅拆解计划表；须用户点「生成任务」写入任务）。
    * 须与 `assistantChatFollowup` 同时为 true 方生效。
    */
   chainCoreMemorySteps?: boolean;
