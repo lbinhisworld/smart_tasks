@@ -130,6 +130,16 @@ function aggregateLlmStats(parts: LlmCallStats[]): LlmCallStats | null {
   };
 }
 
+function waitForReactPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+type ParseReportOutcome = { ok: true; summaryLine: string } | { ok: false; error: string };
+
 /** 懒加载于 `App` 的「报告」路由；Tab：日报列表 / 议题管理 / 报告提取 / 提取历史。 */
 export function ReportManagement() {
   const { user, visibleTasks, tasks, addTask, updateTask } = useTasks();
@@ -196,6 +206,11 @@ export function ReportManagement() {
   /** 手动点击「保存并更新现有任务进度」「拆解日报计划条目」且整段逻辑跑完后，按钮绿底白字提示 */
   const [reportSaveProgressDoneUi, setReportSaveProgressDoneUi] = useState(false);
   const [reportSplitPlanDoneUi, setReportSplitPlanDoneUi] = useState(false);
+  const [autoParseBusy, setAutoParseBusy] = useState(false);
+  const [autoParsePrimary, setAutoParsePrimary] = useState<string | null>(null);
+  const [autoParsePrimaryStreaming, setAutoParsePrimaryStreaming] = useState(false);
+  const [autoParseDetail, setAutoParseDetail] = useState<string | null>(null);
+  const [autoParseBadge, setAutoParseBadge] = useState<"running" | "done" | "error">("running");
   /** 助手「输入报告」解析成功后自动串联环节 2→3 的触发计数（每解析成功且请求链式执行时 +1） */
   const [assistCoreMemoryChainNonce, setAssistCoreMemoryChainNonce] = useState(0);
   const assistCoreChainInFlightRef = useRef(false);
@@ -492,7 +507,32 @@ export function ReportManagement() {
   const textFromFileLocked = file !== null;
   const fileFromTextLocked = manualText.trim() !== "";
 
-  const parseReport = useCallback(async (req?: AssistantReportParseRequest) => {
+  /** 自动解析开头：清空提取结果与侧栏草稿，保留当前附件/正文输入。 */
+  const resetReportExtractionSurfaceKeepInput = useCallback(() => {
+    clearReportExtractionPreviewDraft();
+    clearReportSidePanelsDraft();
+    setShowPrompt(false);
+    setError(null);
+    setExtracted(null);
+    setRawModel(null);
+    setParsed(null);
+    setLlmCallStats(null);
+    setHubStandardRows(null);
+    setHubBranchParses(null);
+    setHubExtractionProgress(null);
+    setPhase("idle");
+    setTaskProgressPanel(null);
+    setPlanGenPanel(null);
+    setTaskProgressRunning(false);
+    setPlanGenRunning(false);
+    setCitationsRefreshing(false);
+    citationsRefreshGuardRef.current = false;
+    setReportSaveProgressDoneUi(false);
+    setReportSplitPlanDoneUi(false);
+    setDataHubImportInfo(null);
+  }, []);
+
+  const parseReport = useCallback(async (req?: AssistantReportParseRequest): Promise<ParseReportOutcome> => {
     const assistantChatFollowup = req?.assistantChatFollowup ?? false;
     const wantCoreMemoryChain = assistantChatFollowup && (req?.chainCoreMemorySteps ?? false);
     const sourceTextOverride = req?.sourceText?.trim() || undefined;
@@ -506,9 +546,10 @@ export function ReportManagement() {
     const effectiveManual = sourceTextOverride ?? manualSnapshot.trim();
 
     if (!fileSnapshot && !effectiveManual) {
-      setError("请上传附件，或在上方文本框中粘贴日报正文（二选一）。");
+      const err = "请上传附件，或在上方文本框中粘贴日报正文（二选一）。";
+      setError(err);
       emitFollowup({ ok: false, extractionDate: "", companyName: "", error: "未提供附件或日报正文。" });
-      return;
+      return { ok: false, error: err };
     }
     const env = readLlmEnv();
     if (!env) {
@@ -516,7 +557,7 @@ export function ReportManagement() {
         '请先在顶部点击设置图标打开「大模型 Key」，填写并保存 DeepSeek API Key；或在 .env 中配置 VITE_LLM_API_KEY / 开发代理（详见 .env.example）。开发环境下 DeepSeek 请求走同源代理 /api/deepseek。';
       setError(msg);
       emitFollowup({ ok: false, extractionDate: "", companyName: "", error: msg });
-      return;
+      return { ok: false, error: msg };
     }
 
     clearReportExtractionPreviewDraft();
@@ -552,7 +593,7 @@ export function ReportManagement() {
         const note = ex.note || "未能从文件中提取到可用文本。";
         setError(note);
         emitFollowup({ ok: false, extractionDate: "", companyName: "", error: note });
-        return;
+        return { ok: false, error: note };
       }
 
       // 数据中台填入的正文：标准提取 data.list → 表格 + 按条调用大模型 + 多分公司预览卡
@@ -565,7 +606,7 @@ export function ReportManagement() {
               "数据中台 JSON 中未解析到有效日报条目（请确认存在 data.list，且条目含 variables：日报日期 / 所属分公司 / 日报内容）。";
             setError(hubErr);
             emitFollowup({ ok: false, extractionDate: "", companyName: "", error: hubErr });
-            return;
+            return { ok: false, error: hubErr };
           }
           setHubStandardRows(hubTry.rows);
           setPhase("calling");
@@ -698,7 +739,7 @@ export function ReportManagement() {
               summaryLine: `已按数据中台格式解析 **${hubTry.rows.length}** 条日报分支，结果在报告管理 **报告提取** 区各预览卡中，可在该页继续《核心记忆》后续环节。`,
             });
           }
-          return;
+          return { ok: true, summaryLine: `已完成 共 ${hubTry.rows.length} 条分公司日报提取` };
         }
       }
 
@@ -716,14 +757,20 @@ export function ReportManagement() {
       const raw = normalizeProductionReportJson(apiResult.content, extractionDate);
       setRawModel(raw);
       let parsedOkForChain = false;
+      let parsedLocal: unknown = null;
       try {
-        setParsed(parseJsonSafe(raw));
+        parsedLocal = parseJsonSafe(raw);
+        setParsed(parsedLocal);
         parsedOkForChain = true;
       } catch {
         setParsed(null);
         setError("模型返回内容不是合法 JSON，已在下方展示原文。");
+        parsedLocal = null;
       }
       setPhase("done");
+      const title =
+        buildExtractionHistoryTitle(parsedLocal, raw) ?? `${extractionDate}-暂无`;
+      const summaryLine = `已完成 ${title} 日报提取`;
       if (assistantChatFollowup) {
         let extractionDateOut = extractionDate;
         let companyNameOut = "";
@@ -747,11 +794,13 @@ export function ReportManagement() {
           setAssistCoreMemoryChainNonce((n) => n + 1);
         }
       }
+      return { ok: true, summaryLine };
     } catch (err) {
       setPhase("error");
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
       emitFollowup({ ok: false, extractionDate: "", companyName: "", error: msg });
+      return { ok: false, error: msg };
     }
   }, [file, manualText, manualFromDataHub]);
 
@@ -881,27 +930,48 @@ export function ReportManagement() {
   }, [rawModel, extracted, parsed, file?.name, llmCallStats, hubBranchParses]);
 
   const runTaskProgressUpdate = useCallback(
-    async (opts?: { quiet?: boolean }): Promise<{
+    async (opts?: {
+      quiet?: boolean;
+      persistHistory?: boolean;
+      markActionDoneUi?: boolean;
+    }): Promise<{
       updated: number;
       skipped: string | null;
       completedForUi: boolean;
+      statusCompleted: number;
+      statusSubstantive: number;
     }> => {
-      const quiet = opts?.quiet ?? false;
+      const suppressAlerts = opts?.quiet ?? false;
+      const persistHistory = opts?.persistHistory ?? !suppressAlerts;
       const env = readLlmEnv();
       if (!env) {
-        if (!quiet) window.alert("请先配置大模型 Key。");
-        return { updated: 0, skipped: quiet ? "no_env" : null, completedForUi: false };
+        if (!suppressAlerts) window.alert("请先配置大模型 Key。");
+        return {
+          updated: 0,
+          skipped: suppressAlerts ? "no_env" : null,
+          completedForUi: false,
+          statusCompleted: 0,
+          statusSubstantive: 0,
+        };
       }
       const slices = collectReportCompanyDailySlices(hubBranchParses, parsed, extracted?.text ?? null);
       if (slices.length === 0) {
-        if (!quiet) {
+        if (!suppressAlerts) {
           window.alert(
             "当前没有可用的「分公司日报」数据。请先完成解析，并确保分公司名称与日报内容有效（单日报需在解析结果中含有效的「分公司名称」）。",
           );
         }
-        return { updated: 0, skipped: "no_slices", completedForUi: false };
+        return {
+          updated: 0,
+          skipped: "no_slices",
+          completedForUi: false,
+          statusCompleted: 0,
+          statusSubstantive: 0,
+        };
       }
       let updatedCount = 0;
+      let statusCompletedCount = 0;
+      let statusSubstantiveCount = 0;
       let ranProgressLoop = false;
     const initialCompanies: CompanyProgressCardState[] = slices.map((s) => {
       const tasks = visibleTasks
@@ -1011,6 +1081,8 @@ export function ReportManagement() {
             }
             updateTask(tid, taskPatch);
             updatedCount += 1;
+            if (inf.statusSuggestion === "已完成") statusCompletedCount += 1;
+            else if (inf.statusSuggestion === "实质性进展") statusSubstantiveCount += 1;
             setTaskProgressPanel((prev) => {
               if (!prev) return prev;
               return {
@@ -1071,29 +1143,39 @@ export function ReportManagement() {
     } finally {
       setTaskProgressRunning(false);
     }
-      let completedForUi = false;
-      if (!quiet && ranProgressLoop) {
+      if (ranProgressLoop && persistHistory) {
         saveToHistory({ retainExtractionPreview: true });
         setDailyListRefreshNonce((n) => n + 1);
-        completedForUi = true;
       }
-      return { updated: updatedCount, skipped: null, completedForUi };
+      const completedForUi =
+        ranProgressLoop &&
+        (opts?.markActionDoneUi === true || (!suppressAlerts && persistHistory));
+      return {
+        updated: updatedCount,
+        skipped: null,
+        completedForUi,
+        statusCompleted: statusCompletedCount,
+        statusSubstantive: statusSubstantiveCount,
+      };
     },
     [visibleTasks, hubBranchParses, parsed, extracted?.text, updateTask, saveToHistory],
   );
 
   /** 仅拆解 6.1/6.2 为表格行，不写入任务列表。 */
   const prepareDailyPlanTaskTable = useCallback(
-    async (opts?: { quiet?: boolean }): Promise<{ skipped: string | null; completedForUi: boolean }> => {
+    async (opts?: {
+      quiet?: boolean;
+      markActionDoneUi?: boolean;
+    }): Promise<{ skipped: string | null; completedForUi: boolean; planRowCount: number }> => {
       const quiet = opts?.quiet ?? false;
       const env = readLlmEnv();
       if (!env) {
         if (!quiet) window.alert("请先配置大模型 Key。");
-        return { skipped: quiet ? "no_env" : null, completedForUi: false };
+        return { skipped: quiet ? "no_env" : null, completedForUi: false, planRowCount: 0 };
       }
       if (phase !== "done") {
         if (!quiet) window.alert("请先完成报告解析。");
-        return { skipped: "phase", completedForUi: false };
+        return { skipped: "phase", completedForUi: false, planRowCount: 0 };
       }
       const contexts = collectReportCompanyPlanContexts(hubBranchParses, parsed, extracted?.text ?? null);
       if (contexts.length === 0) {
@@ -1102,7 +1184,7 @@ export function ReportManagement() {
             "当前没有可用的分公司日报解析结果（需中台多卡含分公司与正文，或单卡解析含「分公司名称」）。",
           );
         }
-        return { skipped: "no_contexts", completedForUi: false };
+        return { skipped: "no_contexts", completedForUi: false, planRowCount: 0 };
       }
       setPlanGenPanel({
         companies: contexts.map((c) => ({
@@ -1113,6 +1195,7 @@ export function ReportManagement() {
         })),
       });
       setPlanGenRunning(true);
+      let planRowCountAcc = 0;
       try {
         for (let ci = 0; ci < contexts.length; ci++) {
           const ctx = contexts[ci]!;
@@ -1173,6 +1256,7 @@ export function ReportManagement() {
             rowPhase: "pending",
             taskCode: null,
           }));
+          planRowCountAcc += rowStates.length;
           setPlanGenPanel((prev) => {
             if (!prev) return prev;
             return {
@@ -1192,10 +1276,103 @@ export function ReportManagement() {
       } finally {
         setPlanGenRunning(false);
       }
-      return { skipped: null, completedForUi: !quiet };
+      const completedForUi = opts?.markActionDoneUi ?? !quiet;
+      return { skipped: null, completedForUi, planRowCount: planRowCountAcc };
     },
     [phase, hubBranchParses, parsed, extracted?.text],
   );
+
+  const reportActionRef = useRef({
+    parseReport,
+    runTaskProgressUpdate,
+    prepareDailyPlanTaskTable,
+  });
+  reportActionRef.current = { parseReport, runTaskProgressUpdate, prepareDailyPlanTaskTable };
+
+  const runAutoParse = useCallback(async () => {
+    if (autoParseBusy) return;
+    if (!file && !manualText.trim()) {
+      window.alert("请先上传附件或在文本框粘贴日报正文。");
+      return;
+    }
+    if (!readLlmEnv()) {
+      window.alert("请先配置大模型 Key（顶部设置）。");
+      return;
+    }
+    setAutoParseBusy(true);
+    setAutoParseBadge("running");
+    setAutoParseDetail(null);
+    setAutoParsePrimaryStreaming(true);
+    setAutoParsePrimary("正在进行【解析】操作");
+    resetReportExtractionSurfaceKeepInput();
+
+    const finishError = (msg: string) => {
+      setAutoParsePrimaryStreaming(false);
+      setAutoParsePrimary(msg);
+      setAutoParseBadge("error");
+      setAutoParseBusy(false);
+    };
+
+    try {
+      const parseOutcome = await reportActionRef.current.parseReport();
+      if (!parseOutcome || parseOutcome.ok !== true) {
+        finishError(parseOutcome.ok === false ? parseOutcome.error : "解析失败。");
+        return;
+      }
+      setAutoParsePrimaryStreaming(false);
+      setAutoParsePrimary(parseOutcome.summaryLine);
+
+      await waitForReactPaint();
+
+      setAutoParsePrimaryStreaming(true);
+      setAutoParsePrimary("正在进行【保存并更新现有任务进度】操作");
+      const prog = await reportActionRef.current.runTaskProgressUpdate({
+        quiet: true,
+        persistHistory: true,
+        markActionDoneUi: true,
+      });
+      if (prog.skipped === "no_env") {
+        finishError("无法更新任务进度（未配置模型）。");
+        return;
+      }
+      setAutoParsePrimaryStreaming(false);
+      setAutoParsePrimary(
+        `已更新 ${prog.updated} 个任务的进度，其中 ${prog.statusCompleted} 个已完成，${prog.statusSubstantive} 个有实质进展。`,
+      );
+
+      await waitForReactPaint();
+
+      setAutoParsePrimaryStreaming(true);
+      setAutoParsePrimary("正在进行【解析日报计划条目】操作");
+      const plan = await reportActionRef.current.prepareDailyPlanTaskTable({
+        quiet: true,
+        markActionDoneUi: true,
+      });
+      setAutoParsePrimaryStreaming(false);
+      if (plan.skipped === "no_env") {
+        finishError("无法解析日报计划条目（未配置模型）。");
+        return;
+      }
+      if (plan.skipped === "phase" || plan.skipped === "no_contexts") {
+        setAutoParsePrimary(
+          plan.skipped === "no_contexts"
+            ? "当前日报中无可拆解的计划段落，未生成任务计划表格。"
+            : "解析状态异常，未执行「解析日报计划条目」。",
+        );
+        setAutoParseBadge("error");
+        setAutoParseBusy(false);
+        return;
+      }
+      setAutoParsePrimary(
+        `已生成 ${plan.planRowCount} 个任务计划，请添加领导指示后点击「生成任务」按钮生成任务。`,
+      );
+      setAutoParseBadge("done");
+    } catch (e) {
+      finishError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    setAutoParseBusy(false);
+  }, [autoParseBusy, file, manualText, resetReportExtractionSurfaceKeepInput]);
 
   /** 用户填写领导指示后，按表格逐行写入任务列表。 */
   const commitDailyPlanTasksFromPanel = useCallback(async () => {
@@ -1348,7 +1525,7 @@ export function ReportManagement() {
         dispatchAssistantReportChainDone({
           progressUpdated: prog.updated,
           progressSkipped: prog.skipped,
-          planGenerated: 0,
+          planGenerated: plan.planRowCount,
           planSkipped: plan.skipped,
           chainError: null,
         });
@@ -1598,7 +1775,7 @@ export function ReportManagement() {
           <button
             type="button"
             className="ghost-btn report-data-hub-btn"
-            disabled={phase === "reading" || phase === "calling"}
+            disabled={autoParseBusy || phase === "reading" || phase === "calling"}
             onClick={handleDataHubFetchClick}
           >
             获取数据中台数据
@@ -1606,8 +1783,27 @@ export function ReportManagement() {
           <div className="parse-btn-wrap">
             <button
               type="button"
+              className="report-auto-parse-btn"
+              disabled={
+                autoParseBusy ||
+                (!file && !manualText.trim()) ||
+                phase === "reading" ||
+                phase === "calling" ||
+                !readLlmEnv()
+              }
+              onClick={() => void runAutoParse()}
+            >
+              自动解析
+            </button>
+            <button
+              type="button"
               className="primary-btn"
-              disabled={(!file && !manualText.trim()) || phase === "reading" || phase === "calling"}
+              disabled={
+                autoParseBusy ||
+                (!file && !manualText.trim()) ||
+                phase === "reading" ||
+                phase === "calling"
+              }
               onClick={() => void parseReport()}
             >
               解析
@@ -1622,6 +1818,45 @@ export function ReportManagement() {
             )}
           </div>
         </div>
+
+        {(autoParseBusy || autoParsePrimary) && (
+          <section
+            className="card sales-forecast-auto-predict-progress-card report-auto-parse-progress-card"
+            role="status"
+            aria-live="polite"
+            aria-label="自动解析进度"
+          >
+            <div className="sales-forecast-auto-predict-progress-card-head">
+              <h3 className="sales-forecast-auto-predict-progress-card-title">自动解析过程</h3>
+              <span
+                className={[
+                  "sales-forecast-auto-predict-progress-card-badge",
+                  autoParseBadge === "done" ? "report-auto-parse-progress-badge--done" : "",
+                  autoParseBadge === "error" ? "report-auto-parse-progress-badge--error" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
+                {autoParseBadge === "running" ? "执行中" : autoParseBadge === "done" ? "已完成" : "异常"}
+              </span>
+            </div>
+            <div className="sales-forecast-auto-predict-progress-card-body">
+              <p
+                className={[
+                  "sales-forecast-auto-predict-progress-card-primary",
+                  autoParsePrimaryStreaming ? "report-auto-parse-progress-primary--streaming" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
+                {autoParsePrimary}
+              </p>
+              {autoParseDetail ? (
+                <p className="sales-forecast-auto-predict-progress-card-detail">{autoParseDetail}</p>
+              ) : null}
+            </div>
+          </section>
+        )}
 
         {dataHubImportInfo && <p className="muted tiny report-data-hub-import-hint">{dataHubImportInfo}</p>}
 
