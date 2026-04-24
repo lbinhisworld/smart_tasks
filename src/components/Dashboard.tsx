@@ -4,9 +4,10 @@
  * @module Dashboard
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { TASK_CATEGORY_LEVEL1_LIST } from "../data/taskCategories";
 import { useTasks } from "../context/TaskContext";
+import type { Task } from "../types/task";
 import { extractionHistoryVisibleForPerspective } from "../utils/leaderPerspective";
 import {
   EXTRACTION_HISTORY_CHANGED_EVENT,
@@ -20,6 +21,8 @@ import { ReportDashboardTab } from "./ReportDashboardTab";
 import { SalesDashboardTab } from "./SalesDashboardTab";
 import { HomeAiChatPanel } from "./HomeAiChatPanel";
 import { HrTalentDashboardTab } from "./HrTalentDashboardTab";
+import { TaskDetailDrawer } from "./TaskDetailDrawer";
+import { TaskStatusPill } from "./TaskStatusPill";
 
 function monthKey(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -39,10 +42,20 @@ const CATEGORY_META: Record<string, { title: string; subtitle: string }> = {
 
 type HomeBoardTab = "tasks" | "reports" | "sales" | "hr";
 
+type DashboardCategoryDrawerState = {
+  categoryLevel1: string;
+  title: string;
+  subtitle: string;
+  tasks: Task[];
+};
+
 /** 默认落地页「看板」；任务、报告、销售、人事四 Tab。 */
 export function Dashboard() {
   const { visibleTasks, toggleFollow, user } = useTasks();
   const [homeBoardTab, setHomeBoardTab] = useState<HomeBoardTab>("tasks");
+  const [categoryDrawer, setCategoryDrawer] = useState<DashboardCategoryDrawerState | null>(null);
+  const [categoryDrawerEntered, setCategoryDrawerEntered] = useState(false);
+  const [dashDetailTaskId, setDashDetailTaskId] = useState<string | null>(null);
   const [reportHistory, setReportHistory] = useState(() => loadExtractionHistory());
   const [reportMonth, setReportMonth] = useState(() => monthKey(new Date()));
 
@@ -122,6 +135,53 @@ export function Dashboard() {
 
   const following = useMemo(() => visibleTasks.filter((t) => t.followedByUser), [visibleTasks]);
 
+  const dashDetailTask = useMemo(
+    () => (dashDetailTaskId ? visibleTasks.find((t) => t.id === dashDetailTaskId) : undefined),
+    [dashDetailTaskId, visibleTasks],
+  );
+
+  useEffect(() => {
+    if (homeBoardTab !== "tasks") {
+      setCategoryDrawer(null);
+      setDashDetailTaskId(null);
+      setCategoryDrawerEntered(false);
+    }
+  }, [homeBoardTab]);
+
+  useEffect(() => {
+    if (!categoryDrawer) {
+      setCategoryDrawerEntered(false);
+      return;
+    }
+    const id = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => setCategoryDrawerEntered(true));
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [categoryDrawer?.categoryLevel1]);
+
+  useEffect(() => {
+    if (!categoryDrawer || dashDetailTaskId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setCategoryDrawer(null);
+        setCategoryDrawerEntered(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [categoryDrawer, dashDetailTaskId]);
+
+  const closeCategoryDrawer = useCallback(() => {
+    setCategoryDrawer(null);
+    setDashDetailTaskId(null);
+    setCategoryDrawerEntered(false);
+  }, []);
+
   const byCategory = (cat: string) => {
     const subset = visibleTasks.filter((t) => t.categoryLevel1 === cat);
     const completed = subset.filter((t) => t.status === "已完成").length;
@@ -185,6 +245,7 @@ export function Dashboard() {
       ) : homeBoardTab === "hr" ? (
         <HrTalentDashboardTab />
       ) : (
+        <>
         <div className="dashboard">
       <div className="dash-main">
         <section className="card kpi-section">
@@ -339,9 +400,21 @@ export function Dashboard() {
                     <h3>{meta.title}</h3>
                     <p className="muted tiny">{meta.subtitle}</p>
                   </div>
-                  <a className="link-more" href="#">
+                  <button
+                    type="button"
+                    className="link-more dash-cat-detail-trigger"
+                    onClick={() => {
+                      setDashDetailTaskId(null);
+                      setCategoryDrawer({
+                        categoryLevel1: cat,
+                        title: meta.title,
+                        subtitle: meta.subtitle,
+                        tasks: subset,
+                      });
+                    }}
+                  >
                     查看详情
-                  </a>
+                  </button>
                 </div>
                 <div className="cat-filters">
                   <span className="muted tiny">口径与总览卡片一致</span>
@@ -411,6 +484,73 @@ export function Dashboard() {
         </div>
       </aside>
         </div>
+
+        {categoryDrawer && (
+          <div className="dash-cat-task-drawer-root" aria-hidden={!categoryDrawer}>
+            <button
+              type="button"
+              className={`dash-cat-task-drawer-backdrop${categoryDrawerEntered ? " is-visible" : ""}`}
+              aria-label="关闭任务列表"
+              onClick={closeCategoryDrawer}
+            />
+            <aside
+              className={`dash-cat-task-drawer-panel${categoryDrawerEntered ? " is-visible" : ""}`}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="dash-cat-task-drawer-title"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="dash-cat-task-drawer-head">
+                <div>
+                  <h2 id="dash-cat-task-drawer-title" className="dash-cat-task-drawer-title">
+                    {categoryDrawer.title}
+                  </h2>
+                  <p className="dash-cat-task-drawer-subtitle muted small">{categoryDrawer.subtitle}</p>
+                  <p className="dash-cat-task-drawer-count muted tiny">
+                    共 {categoryDrawer.tasks.length} 条任务（与指标图口径一致）
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="dash-cat-task-drawer-close"
+                  aria-label="关闭"
+                  onClick={closeCategoryDrawer}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="dash-cat-task-drawer-body">
+                <ul className="dash-cat-task-drawer-list">
+                  {[...categoryDrawer.tasks]
+                    .sort((a, b) => a.expectedCompletion.localeCompare(b.expectedCompletion))
+                    .map((t) => (
+                      <li key={t.id}>
+                        <button
+                          type="button"
+                          className={`dash-cat-task-drawer-row${dashDetailTaskId === t.id ? " is-active" : ""}`}
+                          onClick={() => setDashDetailTaskId(t.id)}
+                        >
+                          <div className="dash-cat-task-drawer-row-top">
+                            <span className="mono tiny">{t.code}</span>
+                            <TaskStatusPill status={t.status} />
+                          </div>
+                          <div className="dash-cat-task-drawer-row-desc">{t.description}</div>
+                          <div className="dash-cat-task-drawer-row-meta muted tiny">
+                            期待完成：{t.expectedCompletion}
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            </aside>
+          </div>
+        )}
+
+        {dashDetailTask && (
+          <TaskDetailDrawer task={dashDetailTask} onClose={() => setDashDetailTaskId(null)} />
+        )}
+        </>
       )}
     </div>
       </div>

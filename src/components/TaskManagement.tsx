@@ -6,13 +6,9 @@ import {
   TASK_CATEGORY_LEVEL1_LIST,
 } from "../data/taskCategories";
 import type { PlanHistorySnapshot } from "../types/planHistory";
-import { TaskStatusPill, taskDetailDrawerToolbarModifierClass } from "./TaskStatusPill";
-import {
-  COORDINATION_PARTY_OPTIONS,
-  type Task,
-  type TaskProgressEntry,
-  type TaskStatus,
-} from "../types/task";
+import { TaskStatusPill } from "./TaskStatusPill";
+import { TaskDetailDrawer } from "./TaskDetailDrawer";
+import { COORDINATION_PARTY_OPTIONS, type Task, type TaskStatus } from "../types/task";
 import { formatReportCalendarDateZh } from "../utils/extractionHistoryGroup";
 import {
   branchRootFromOrgPath,
@@ -105,21 +101,12 @@ export function TaskManagement() {
   const [planHistorySelectedKeys, setPlanHistorySelectedKeys] = useState<string[]>([]);
   const [smartsheetPushBusyIds, setSmartsheetPushBusyIds] = useState<Set<string>>(() => new Set());
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
-  const [detailDrawerEntered, setDetailDrawerEntered] = useState(false);
   const taskListHeaderCheckboxRef = useRef<HTMLInputElement>(null);
 
   const detailTask = useMemo(
     () => (detailTaskId ? visibleTasks.find((t) => t.id === detailTaskId) : undefined),
     [detailTaskId, visibleTasks],
   );
-
-  const sortedProgressEntries = useMemo((): TaskProgressEntry[] => {
-    const raw = detailTask?.progressTracking;
-    if (!raw?.length) return [];
-    return [...raw].sort(
-      (a, b) => a.date.localeCompare(b.date) || a.description.localeCompare(b.description),
-    );
-  }, [detailTask?.progressTracking]);
 
   const isGroupPerspective = user.perspective === GROUP_LEADER_PERSPECTIVE;
   const lockedInitiatorUnit = orgUnitFromPerspective(user.perspective);
@@ -165,31 +152,6 @@ export function TaskManagement() {
   useEffect(() => {
     if (detailTaskId && !detailTask) setDetailTaskId(null);
   }, [detailTaskId, detailTask]);
-
-  useEffect(() => {
-    if (!detailTaskId) {
-      setDetailDrawerEntered(false);
-      return;
-    }
-    const id = window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => setDetailDrawerEntered(true));
-    });
-    return () => window.cancelAnimationFrame(id);
-  }, [detailTaskId]);
-
-  useEffect(() => {
-    if (!detailTaskId) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setDetailTaskId(null);
-    };
-    window.addEventListener("keydown", onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [detailTaskId]);
 
   useEffect(() => {
     setPlanHistorySelectedKeys((prev) =>
@@ -524,123 +486,7 @@ export function TaskManagement() {
         </div>
       </section>
 
-      {detailTask && (
-        <div className="task-detail-drawer-root">
-          <div
-            className={`task-detail-drawer-backdrop${detailDrawerEntered ? " is-visible" : ""}`}
-            role="presentation"
-            aria-hidden="true"
-            onClick={() => setDetailTaskId(null)}
-          />
-          <aside
-            className={`task-detail-drawer-panel${detailDrawerEntered ? " is-visible" : ""}`}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="task-detail-drawer-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              className={`task-detail-drawer-toolbar ${taskDetailDrawerToolbarModifierClass(detailTask.status)}`}
-            >
-              <h2 id="task-detail-drawer-title">{detailTask.status}</h2>
-              <button
-                type="button"
-                className="task-detail-drawer-close"
-                aria-label="关闭"
-                onClick={() => setDetailTaskId(null)}
-              >
-                ×
-              </button>
-            </div>
-            <div className="task-detail-drawer-body">
-              <dl className="task-detail-dl">
-                <div>
-                  <dt>编号</dt>
-                  <dd className="mono">{detailTask.code}</dd>
-                </div>
-                <div>
-                  <dt>发起人</dt>
-                  <dd>{detailTask.initiator}</dd>
-                </div>
-                <div>
-                  <dt>发起部门</dt>
-                  <dd>{detailTask.department}</dd>
-                </div>
-                <div>
-                  <dt>执行部门</dt>
-                  <dd className="muted tiny">{detailTask.executingDepartment || "—"}</dd>
-                </div>
-                <div>
-                  <dt>接收/配合</dt>
-                  <dd className="muted tiny">
-                    {(detailTask.receiverDepartments?.length
-                      ? detailTask.receiverDepartments.join("、")
-                      : detailTask.receiverDepartment) || "—"}
-                  </dd>
-                </div>
-                <div className="task-detail-dl-full">
-                  <dt>任务大类</dt>
-                  <dd className="task-text-wrap small">{detailTask.categoryLevel1}</dd>
-                </div>
-                <div className="task-detail-dl-full">
-                  <dt>任务子类</dt>
-                  <dd className="task-text-wrap small">{detailTask.categoryLevel2}</dd>
-                </div>
-                <div className="task-detail-dl-full">
-                  <dt>任务动因</dt>
-                  <dd className="task-detail-highlight-card task-text-wrap small">
-                    {detailTask.taskMotivation?.trim() || "—"}
-                  </dd>
-                </div>
-                <div className="task-detail-dl-full">
-                  <dt>任务描述</dt>
-                  <dd className="task-detail-highlight-card task-text-wrap">{detailTask.description}</dd>
-                </div>
-                <div className="task-detail-dl-full">
-                  <dt>领导指示</dt>
-                  <dd className="task-detail-leader-card task-text-wrap small">
-                    {detailTask.leaderInstruction?.trim() || "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>期待完成</dt>
-                  <dd>{detailTask.expectedCompletion}</dd>
-                </div>
-                {detailTask.status === "卡住待协调" && (
-                  <div>
-                    <dt>协调方</dt>
-                    <dd>{detailTask.coordinationParty?.trim() || "—"}</dd>
-                  </div>
-                )}
-              </dl>
-              <section className="task-detail-progress-section" aria-labelledby="task-detail-progress-heading">
-                <h3 id="task-detail-progress-heading" className="task-detail-progress-heading">
-                  进度跟踪
-                </h3>
-                {sortedProgressEntries.length === 0 ? (
-                  <p className="muted small task-detail-progress-empty">
-                    暂无进展记录；可在<strong>报告</strong>页「现有任务进度更新」中根据日报写入。
-                  </p>
-                ) : (
-                  <ul className="task-detail-timeline" aria-label="进度时间线">
-                    {sortedProgressEntries.map((row, idx) => (
-                      <li key={`${row.date}-${idx}-${row.description.slice(0, 24)}`} className="task-detail-timeline-item">
-                        <span className="task-detail-timeline-dot" aria-hidden="true">
-                          ○
-                        </span>
-                        <div className="task-detail-timeline-main">
-                          <div className="task-detail-timeline-date mono">{row.date}</div>
-                          <div className="task-detail-timeline-desc">{row.description}</div>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-            </div>
-          </aside>
-        </div>
-      )}
+      {detailTask && <TaskDetailDrawer task={detailTask} onClose={() => setDetailTaskId(null)} />}
 
       {manualNewTaskOpen && (
         <div className="task-new-drawer-root">
